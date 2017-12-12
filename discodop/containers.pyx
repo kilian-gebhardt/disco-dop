@@ -73,7 +73,7 @@ cdef class Chart:
 		"""Return the right item that edge points to."""
 		raise NotImplementedError
 
-	cdef Label label(self, ItemNo itemidx):
+	cpdef Label label(self, ItemNo itemidx):
 		raise NotImplementedError
 
 	cdef Prob subtreeprob(self, ItemNo itemidx):
@@ -236,6 +236,17 @@ cdef class Chart:
 		# more stats:
 		# labels: len({self.label(item) for item in range(1, self.numitems() + 1)}),
 		# spans: ...
+
+	cpdef size_t numedges(self, ItemNo itemidx):
+		"""Return the number of edges headed by an item."""
+		return self.parseforest[itemidx].size()
+
+	def getEdgeForItem(self, ItemNo itemidx, size_t edge_no):
+		cdef Edge edge = self.parseforest[itemidx][edge_no]
+		if edge.rule is NULL:
+			return self.lexidx(edge)
+		else:
+			return dereference(edge.rule).no, self._left(itemidx, edge), self._right(itemidx, edge)
 
 
 cdef void _filtersubtree(Chart chart, item, set items):

@@ -992,6 +992,9 @@ cdef class Grammar:
 				left.ljust(40), self.yfstr(rule).ljust(2),
 				self.rulecounts[rule.no], self.freqmass[rule.lhs], rule.no)
 
+	cpdef nonterminalstr(self, int idx):
+		return self.tolabel[idx]
+
 	cdef yfstr(self, ProbRule rule):
 		cdef int n, m = 0
 		cdef str result = ''

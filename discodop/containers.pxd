@@ -565,6 +565,7 @@ cdef class Grammar:
 	cdef _indexrules(self, vector[ProbRule *]& dest, int idx, int filterlen,
 			int orignumrules)
 	cpdef rulestr(self, int n)
+	cpdef nonterminalstr(self, int idx)
 	cpdef noderuleno(self, node)
 	cpdef getruleno(self, tuple r, tuple yf)
 	cdef yfstr(self, ProbRule rule)
@@ -599,11 +600,12 @@ cdef class Chart:
 	cdef ItemNo _right(self, ItemNo itemidx, Edge edge)
 	cdef ItemNo left(self, ItemNo v, RankedEdge edge)
 	cdef ItemNo right(self, ItemNo v, RankedEdge edge)
-	cdef Label label(self, ItemNo itemidx)
+	cpdef Label label(self, ItemNo itemidx)
 	cdef ItemNo getitemidx(self, uint64_t idx)
 	cdef SmallChartItem asSmallChartItem(self, ItemNo itemidx)
 	cdef FatChartItem asFatChartItem(self, ItemNo itemidx)
 	cdef size_t asCFGspan(self, ItemNo itemidx)
+	cpdef size_t numedges(self, ItemNo itemidx)
 
 
 @cython.final
