@@ -38,7 +38,7 @@ cdef class CFGChart(Chart):
 			start=None, logprob=True, viterbi=True):
 		raise NotImplementedError
 
-	cdef Label label(self, ItemNo itemidx):
+	cpdef Label label(self, ItemNo itemidx):
 		raise NotImplementedError
 
 	cdef Prob subtreeprob(self, ItemNo itemidx):
@@ -131,7 +131,7 @@ cdef class DenseCFGChart(CFGChart):
 	cdef Label _label(self, uint64_t item):
 		return item % self.grammar.nonterminals
 
-	cdef Label label(self, ItemNo itemidx):
+	cpdef Label label(self, ItemNo itemidx):
 		cdef uint64_t item = itemidx
 		return item % self.grammar.nonterminals
 
@@ -313,7 +313,7 @@ cdef class SparseCFGChart(CFGChart):
 		itemx.dt = item
 		return itemx.st.label
 
-	cdef Label label(self, ItemNo itemidx):
+	cpdef Label label(self, ItemNo itemidx):
 		cdef CFGItem item
 		item.dt = self.items[itemidx]
 		return item.st.label

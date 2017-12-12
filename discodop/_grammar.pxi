@@ -731,6 +731,9 @@ cdef class Grammar:
 				if rule.rhs2 else '')
 		return '%s %s [%d]' % (left.ljust(40), self.yfstr(rule), rule.no)
 
+	cpdef nonterminalstr(self, int idx):
+		return self.tolabel[idx]
+
 	cdef yfstr(self, ProbRule rule):
 		cdef int n, m = 0
 		cdef str result = ''

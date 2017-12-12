@@ -47,7 +47,7 @@ cdef class LCFRSChart(Chart):
 	cdef Prob subtreeprob(self, ItemNo itemidx):
 		return self.probs[itemidx]
 
-	cdef Label label(self, ItemNo itemidx):
+	cpdef Label label(self, ItemNo itemidx):
 		raise NotImplementedError
 
 
@@ -103,7 +103,7 @@ cdef class SmallLCFRSChart(LCFRSChart):
 			return 0
 		return self.itemindex[self._root()]
 
-	cdef Label label(self, ItemNo itemidx):
+	cpdef Label label(self, ItemNo itemidx):
 		return self.items[itemidx].label
 
 	cdef Label _label(self, ItemNo itemidx):
@@ -213,7 +213,7 @@ cdef class FatLCFRSChart(LCFRSChart):
 			return 0
 		return self.itemindex[tmp]
 
-	cdef Label label(self, ItemNo itemidx):
+	cpdef Label label(self, ItemNo itemidx):
 		return self._label(itemidx)  # somehow needed
 
 	cdef Label _label(self, ItemNo itemidx):
