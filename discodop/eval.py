@@ -235,6 +235,28 @@ class Evaluator(object):
 						end='')
 			print()
 
+	def sec_edge_statistics(self):
+		""":returns: a string with scores involing secondary edges."""
+		acc = self.acc
+		msg = ['%s' % ' Secondary edges (ALL) '.center(35, '_')]
+		msg.extend([
+			'secondary edges:             %6d' % len(acc.goldsecedge),
+			'cand. secondary edges:       %6d' % len(acc.candsecedge),
+			'labeled recall (se):         %s' %
+			nozerodiv(lambda: recall(acc.goldsecedge, acc.candsecedge)),
+			'labeled precision (se):      %s' % (
+			nozerodiv(lambda: precision(acc.goldsecedge, acc.candsecedge))),
+			'labeled f-measure (se):      %s' % (
+			nozerodiv(lambda: f_measure(acc.goldsecedge, acc.candsecedge))),
+			'brackets (following sec. edges)',
+			'labeled recall:              %s' %
+			nozerodiv(lambda: recall(acc.goldbse, acc.candbse)),
+			'labeled precision:           %s' % (
+			nozerodiv(lambda: precision(acc.goldbse, acc.candbse))),
+			'labeled f-measure:           %s' % (
+			nozerodiv(lambda: f_measure(acc.goldbse, acc.candbse)))])
+		return '\n'.join(msg)
+
 	def summary(self):
 		""":returns: a string with an overview of scores for all sentences."""
 		acc = self.acc
@@ -366,6 +388,18 @@ class TreePairResult(object):
 				self.param['DELETE_LABEL'], self.param['DISC_ONLY'])
 		self.gbrack = bracketings(self.gtree, self.param['LABELED'],
 				self.param['DELETE_LABEL'], self.param['DISC_ONLY'])
+		self.cbrackse = bracketings_se(self.ctree, self.param['LABELED'],
+				self.param['DELETE_LABEL'])
+		self.gbrackse = bracketings_se(self.gtree, self.param['LABELED'],
+				self.param['DELETE_LABEL'])
+		if self.param['SEC_EDGES'] == 'all':
+			se_filter = None
+		elif self.param['SEC_EDGES'] == 'gold':
+			se_filter = self.gbrack
+		else:
+			se_filter = None
+		self.csecedge = secedges(self.ctree, self.param['LABELED'], se_filter)
+		self.gsecedge = secedges(self.gtree, self.param['LABELED'], se_filter)
 		self.lascore = self.ted = self.denom = Decimal('nan')
 		self.cdep = self.gdep = ()
 		self.pgbrack = Counter()
@@ -538,6 +572,8 @@ class EvalAccumulator(object):
 		self.exact = Decimal(0)
 		self.dicenoms, self.dicedenoms = Decimal(0), Decimal(0)
 		self.goldb, self.candb = Counter(), Counter()  # all brackets
+		self.goldbse, self.candbse = Counter(), Counter()  # brackets with secondary edges
+		self.goldsecedge, self.candsecedge = Counter(), Counter()  # secondary edges
 		self.goldfun, self.candfun = Counter(), Counter()
 		self.lascores = []
 		self.golddep, self.canddep = [], []
@@ -558,6 +594,10 @@ class EvalAccumulator(object):
 			self.maxlenseen = pair.lengpos
 		self.candb.update((pair.n, a) for a in pair.cbrack.elements())
 		self.goldb.update((pair.n, a) for a in pair.gbrack.elements())
+		self.goldbse.update((pair.n, a) for a in pair.gbrackse.elements())
+		self.candbse.update((pair.n, a) for a in pair.cbrackse.elements())
+		self.goldsecedge.update((pair.n, a) for a in pair.gsecedge.elements())
+		self.candsecedge.update((pair.n, a) for a in pair.csecedge.elements())
 		if pair.cbrack == pair.gbrack:
 			if not self.disconly or pair.cbrack or pair.gbrack:
 				self.exact += 1
@@ -605,7 +645,7 @@ def main():
 	"""Command line interface for evaluation."""
 	flags = {'help', 'verbose', 'debug', 'disconly', 'ted', 'la'}
 	options = {'goldenc=', 'parsesenc=', 'goldfmt=', 'parsesfmt=', 'fmt=',
-			'cutofflen=', 'headrules=', 'functions=', 'morphology='}
+			'cutofflen=', 'headrules=', 'functions=', 'morphology=', 'secedges='}
 	try:
 		opts, args = gnu_getopt(sys.argv[2:], 'h', flags | options)
 	except GetoptError as err:
@@ -627,6 +667,7 @@ def main():
 	param['TED'] |= '--ted' in opts
 	param['LA'] |= '--la' in opts
 	param['DEP'] = '--headrules' in opts
+	param['SEC_EDGES'] = opts.get('--secedges', param['SEC_EDGES'])
 	if '--fmt' in opts:
 		opts['--goldfmt'] = opts['--parsesfmt'] = opts['--fmt']
 	goldreader = READERS[opts.get('--goldfmt', 'export')]
@@ -655,6 +696,9 @@ def main():
 		evaluator.add(n, goldtrees[n], goldsents[n], ctree, candsents[n])
 	if param['LABELED'] and param['DEBUG'] != -1:
 		evaluator.breakdowns()
+	if param['SEC_EDGES']:
+		print(evaluator.sec_edge_statistics(), end='\n')
+		print()
 	print(evaluator.summary())
 
 
@@ -663,13 +707,13 @@ def readparam(filename):
 	param = defaultdict(list)
 	# NB: we ignore MAX_ERROR, we abort immediately on error.
 	validkeysonce = ('DEBUG', 'MAX_ERROR', 'CUTOFF_LEN', 'LABELED',
-			'DISC_ONLY', 'LA', 'TED', 'DEP', 'DELETE_ROOT_PRETERMS')
+			'DISC_ONLY', 'LA', 'TED', 'DEP', 'DELETE_ROOT_PRETERMS', 'SEC_EDGES')
 	param = {'DEBUG': 0, 'MAX_ERROR': 10, 'CUTOFF_LEN': 40,
 				'LABELED': 1, 'DELETE_LABEL_FOR_LENGTH': set(),
 				'DELETE_LABEL': set(), 'DELETE_WORD': set(),
 				'EQ_LABEL': set(), 'EQ_WORD': set(),
 				'DISC_ONLY': 0, 'LA': 0, 'TED': 0, 'DEP': 0,
-				'DELETE_ROOT_PRETERMS': 0}
+				'DELETE_ROOT_PRETERMS': 0, 'SEC_EDGES': 0}
 	seen = set()
 	lines = []
 	if filename:
@@ -824,7 +868,7 @@ def parentedbracketings(tree, labeled=True, dellabel=(), disconly=False):
 
 
 def bracketings(tree, labeled=True, dellabel=(), disconly=False):
-	"""Return the labeled set of bracketings for a tree.
+	"""Return the set of labeled bracketings for a tree.
 
 	For each nonterminal node, the set will contain a tuple with the label and
 	the set of terminals which it dominates.
@@ -870,6 +914,76 @@ def strbracketings(brackets):
 	return ', '.join('%s[%s]' % (a, ','.join(
 		'-'.join('%d' % y for y in sorted(set(x)))
 		for x in intervals(b))) for a, b in sorted(brackets))
+
+
+def build_export_idx(tree):
+	tree_idx = {}
+	for a in tree.subtrees():
+		if isinstance(a[0], Tree):
+			src = a.source
+			if src is not None and src[0][0] == '#':
+				tree_idx[src[0][1:]] = a
+	return tree_idx
+
+
+def secedges(tree, labeled=True, bracket_filter=None):
+	"""Return set of secondary edges of a tree.
+
+	Each edge is represented as a triple consisting of
+	the (labeled) bracket corresponding to the parent node,
+	the edge label, and
+	the (labeled) bracket corresponding to the child node.
+
+	If bracket_filter is not None, than only edges between brackets
+	bracket_filter are considered."""
+	tree_idx = build_export_idx(tree)
+	return Counter(
+			(bracketing(tree_idx[p], labeled),
+				edge_label,
+				bracketing(a, labeled))
+			for a in tree.subtrees()
+			if isinstance(a, Tree) and a.source
+			for p, edge_label in zip(a.source[7::2], a.source[6::2])
+			if bracket_filter is None
+			or (bracketing(tree_idx[p], labeled) in bracket_filter
+				and (bracketing(a, labeled) in bracket_filter
+					 or not isinstance(a[0], Tree)))
+			)
+
+
+def bracketings_se(tree, labeled=True, dellabel=()):
+	"""Set of labeled brackets including positions reached via secondary edges.
+	"""
+	tree_idx = build_export_idx(tree)
+	sec_children = defaultdict(lambda: [])
+
+	for a in tree.subtrees():
+		if isinstance(a, Tree) and a.source:
+			for p in a.source[7::2]:
+				sec_children[tree_idx[p]].append(a)
+
+	bitset = {}
+	agenda = set(tree.postorder())
+	while agenda:
+		added = []
+		for a in agenda:
+			if all([c in bitset for c in a.children if isinstance(c, Tree)]) \
+				and all([c in bitset for c in sec_children[a]]):
+				bitset[a] = a.bitset
+				for c in a.children + sec_children[a]:
+					if isinstance(c, Tree):
+						bitset[a] |= bitset[c]
+				added.append(a)
+		for a in added:
+			agenda.remove(a)
+		# catch infinite loop
+		if not added:
+			raise AssertionError("Secondary edges establish cycle!")
+
+	return Counter((a.label if labeled else '', bitset[a])
+			for a in tree.subtrees()
+			if a and isinstance(a[0], Tree)  # nonempty, not a preterminal
+			and a.label not in dellabel)
 
 
 def leafancestorpaths(tree, dellabel):

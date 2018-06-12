@@ -29,6 +29,11 @@ Options
 --ted            Enable tree-edit distance evaluation.
                  NB: it is not clear whether this score is applicable to
                  discontinuous trees.
+--secedges=x     Print additional statistics on secondary edges.
+                 'no'=default: do not print additional statistics
+                 'all': consider all secondary edges
+                 'gold': only consider secondary edges between nodes that
+                         also occur in the gold tree
 --headrules=x    Specify file with heuristic rules for head assignment of
                  constituents that do not already have a child marked as head.
                  This enables dependency evaluation. NB: this evaluation is
