@@ -934,7 +934,8 @@ def secedges(tree, labeled=True, bracket_filter=None):
 	the edge label, and
 	the (labeled) bracket corresponding to the child node.
 
-	If bracket_filter is not None, than only edges between brackets
+	If bracket_filter is not None, then only edges between brackets
+	
 	bracket_filter are considered."""
 	tree_idx = build_export_idx(tree)
 	return Counter(
