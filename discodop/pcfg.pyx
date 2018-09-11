@@ -114,6 +114,20 @@ cdef class DenseCFGChart(CFGChart):
 			self.items.push_back(item)
 		return True
 
+	cdef int prunecell(self, uint64_t cell):
+		"""Set 0 probability to each item of a cell that falls outside the beam. 
+		
+		Return number of pruned items."""
+		cdef int pruning_counter = 0
+		cdef uint64_t item
+		beamitem = cell // self.grammar.nonterminals
+		for item in range(cell + 1, cell + self.grammar.nonterminals):
+			if (isfinite(self.probs[item])
+					and self.probs[item] > self.beambuckets[beamitem]):
+				self.probs[item] = INFINITY
+				pruning_counter += 1
+		return pruning_counter
+
 	cdef ItemNo _left(self, ItemNo itemidx, Edge edge):
 		cdef uint64_t item = itemidx
 		cdef short start
@@ -526,6 +540,10 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 
 			applyunaryrules[CFGChart_fused](chart, left, right, cell, lastidx,
 					unaryagenda, &midfilter, &blocked, None)
+
+			if CFGChart_fused is DenseCFGChart \
+				and beam_beta:
+				pruned += chart.prunecell(cell)
 
 	msg = '%s%s, blocked %s%s' % (
 			'' if chart else 'no parse; ', chart.stats(), blocked,
