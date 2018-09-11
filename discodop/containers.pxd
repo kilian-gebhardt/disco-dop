@@ -735,7 +735,7 @@ cdef inline size_t compactcellidx(short start, short end, short lensent,
 	"""Return an index to a triangular array, given start < end.
 	The result of this function is the index to chart[start][end][0]."""
 	return nonterminals * (lensent * start
-			- ((start - 1) * start / 2) + end - start - 1)
+			- ((start - 1) * start // 2) + end - start - 1)
 
 
 cdef object log1e200 = log(1e200)

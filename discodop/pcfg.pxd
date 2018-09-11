@@ -60,6 +60,7 @@ cdef class DenseCFGChart(CFGChart):
 	cdef Label _label(self, uint64_t item)
 	cdef Prob _subtreeprob(self, uint64_t item)
 	cdef bint _hasitem(self, uint64_t item)
+	cdef int prunecell(self, uint64_t cell)
 
 
 @cython.final

@@ -119,6 +119,23 @@ cdef class DenseCFGChart(CFGChart):
 			self.items.push_back(item)
 		return True
 
+	cdef int prunecell(self, uint64_t cell):
+		"""Set 0 probability to each item of a cell that falls outside the beam. 
+		
+		Return number of pruned items."""
+		cdef int pruning_counter = 0
+		cdef uint64_t item
+		cdef uint64_t itemx = cell - cell % self.grammar.nonterminals
+		cdef short left = itemx // (self.grammar.nonterminals * self.lensent)
+		cdef short right = itemx // self.grammar.nonterminals % self.lensent + 1
+		cdef uint64_t beamitem = compactcellidx(left, right, self.lensent, 1)
+		for item in range(cell + 1, cell + self.grammar.nonterminals):
+			if (isfinite(self.probs[item])
+					and self.probs[item] > self.beambuckets[beamitem]):
+				self.probs[item] = INFINITY
+				pruning_counter += 1
+		return pruning_counter
+
 	cdef ItemNo _left(self, ItemNo itemidx, Edge edge):
 		cdef uint64_t item = itemidx
 		cdef short start
@@ -454,7 +471,7 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		Prob prevprob, prob
 		Label lhs = 0
 		uint32_t n
-		uint64_t item, leftitem, rightitem, cell, blocked = 0
+		uint64_t item, leftitem, rightitem, cell, blocked = 0, pruned = 0
 		ItemNo lastidx
 		size_t nts = grammar.nonterminals
 		bint usemask = grammar.mask.size() != 0
@@ -531,8 +548,13 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 			applyunaryrules[CFGChart_fused](chart, left, right, cell, lastidx,
 					unaryagenda, &midfilter, &blocked, None)
 
-	msg = '%s%s, blocked %s' % (
-			'' if chart else 'no parse; ', chart.stats(), blocked)
+			if CFGChart_fused is DenseCFGChart \
+				and beam_beta:
+				pruned += chart.prunecell(cell)
+
+	msg = '%s%s, blocked %s%s' % (
+			'' if chart else 'no parse; ', chart.stats(), blocked,
+			', pruned %s' % pruned if beam_beta else '')
 	return chart, msg
 
 
