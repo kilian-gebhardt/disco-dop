@@ -376,7 +376,7 @@ cdef parse_main(LCFRSChart_fused chart, LCFRSItem_fused goal, sent,
 		short lensent = len(sent), estimatetype = 0
 		int length = 1, left = 0, right = 0, gaps = 0
 		ItemNo itemidx, sibidx
-		size_t blocked = 0, maxA = 0, n
+		size_t blocked = 0, maxA = 0, n, pruned = 0
 		bint usemask = grammar.mask.size() != 0
 	# avoid generating code for spurious fused type combinations
 	if ((LCFRSItem_fused is SmallChartItem
@@ -408,9 +408,29 @@ cdef parse_main(LCFRSChart_fused chart, LCFRSItem_fused goal, sent,
 		itemidx = entry.first
 		prob = entry.second.second
 		item = chart.items[itemidx]
+
+		# check if item falls outside of beam
+		if beam_beta:
+			if LCFRSItem_fused is SmallChartItem:
+				length = bitcount(item.vec)
+			elif LCFRSItem_fused is FatChartItem:
+				length = abitcount(item.vec, SLOTS)
+			if length <= beam_delta:
+				label = item.label
+				item.label = 0
+				it = chart.beambuckets.find(item)
+				if it == chart.beambuckets.end():
+					# FIXME: why is the beambucket not set for some items?
+					pass
+				elif prob > dereference(it).second:
+					pruned += 1
+					continue
+				item.label = label
+
 		# store viterbi probability; cannot do this when this item is added to
 		# the agenda because that would give rise to duplicate edges.
 		chart.updateprob(itemidx, prob)
+
 		if item == goal:
 			if not exhaustive:
 				break
@@ -594,8 +614,8 @@ cdef parse_main(LCFRSChart_fused chart, LCFRSItem_fused goal, sent,
 							blocked += 1
 		if agenda.size() > maxA:
 			maxA = agenda.size()
-	msg = ('%s, blocked %d, agenda max %d, now %d' % (
-			chart.stats(), blocked, maxA, agenda.size()))
+	msg = ('%s, blocked %d, agenda max %d, now %d, pruned %d' % (
+			chart.stats(), blocked, maxA, agenda.size(), pruned))
 	if not chart:
 		return chart, 'no parse; ' + msg
 	return chart, msg
