@@ -12,3 +12,7 @@ ctypedef sparse_hash_map[ItemNo, RankedEdgeAgenda[Prob]] agendas_type
 
 cdef string getderiv(ItemNo v, RankedEdge ej, Chart chart)
 cdef collectitems(ItemNo v, RankedEdge& ej, Chart chart, itemset)
+
+cdef extern from "<cmath>" namespace "std" nogil:
+	bint isfinite(double v)
+	bint isinf(double v)
