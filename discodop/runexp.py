@@ -194,6 +194,67 @@ def startexp(
 					prm.relationalrealizational),
 				sents, prm.stages, prm.testcorpus.maxwords, resultdir,
 				prm.numproc, lexmodel, top)
+
+		#TODO train pruning stuff
+		if prm.stages[0].split:
+			stage = prm.stages[0]
+
+			def preparetrees(_trees, _sents):
+				_trees = dobinarization(_trees, _sents, prm.binarization,
+						prm.relationalrealizational)
+
+				_trees = [treetransforms.binarize(
+					treetransforms.splitdiscnodes(
+						tree.copy(True),
+						stage.markorigin),
+					childchar=':', dot=True, ids=grammar.UniqueIDs())
+					for tree in _trees]
+
+				if stage.collapse:
+					_trees, _ = treebanktransforms.collapselabels(
+						[tree.copy(True) for tree in _trees],
+						tbmapping=treebanktransforms.MAPPINGS[
+							stage.collapse[0]][stage.collapse[1]])
+				return _trees
+
+			pruningdir = os.path.join(resultdir, "pruning")
+			for d in [pruningdir]:
+				if not os.path.exists(d):
+					os.mkdir(d)
+			pruningtrain = os.path.join(pruningdir, "train.txt")
+			pruningtraintrees = os.path.join(pruningdir, "train.export")
+			pruningtest = os.path.join(pruningdir, "test.txt")
+			pruningtesttrees = os.path.join(pruningdir, "test.export")
+			pruningdev = os.path.join(pruningdir, "dev.txt")
+
+			from .pruning import bracketannotation, annotation2file, \
+				pruning_training
+
+			traintrees = preparetrees(trees, sentsoriginal)
+			with io.open(pruningtraintrees, 'w', encoding='utf8') as out:
+				out.writelines(treebank.writetree(
+					traintree, sent, n, prm.corpusfmt,
+					morphology=prm.morphology) for n, (traintree, sent) in enumerate(zip(traintrees, sentsoriginal)))
+			with open(pruningtrain, mode='w') as trainfile:
+				for t, s in zip(preparetrees(trees, sentsoriginal), sentsoriginal):
+					annotation2file(bracketannotation(t, s), trainfile)
+			testtrees = [t for _, (_,t,_,_) in testset.items()]
+			testsents = [[w for w, _ in sent] for _,(_, _, sent,_) in testset.items()]
+			logging.info(str(testsents[0]))
+			testtrees = preparetrees(testtrees, testsents)
+			with io.open(pruningtesttrees, 'w', encoding='utf8') as out:
+				out.writelines(treebank.writetree(
+					testtree, sent, n, prm.corpusfmt,
+					morphology=prm.morphology) for n, (testtree, sent) in enumerate(zip(testtrees, testsents)))
+			with open(pruningtest, mode='w') as testfile:
+				for t, s in zip(testtrees, testsents):
+					annotation2file(bracketannotation(t, s), testfile)
+			with open(pruningdev, mode='w') as _:
+				pass
+
+			pruning_training(pruningdir)
+
+
 	evalparam = evalmod.readparam(prm.evalparam)
 	evalparam['DEBUG'] = -1
 	evalparam['CUTOFF_LEN'] = 40
