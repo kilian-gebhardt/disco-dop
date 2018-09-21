@@ -411,7 +411,7 @@ cdef class SparseCFGChart(CFGChart):
 
 def parse(sent, Grammar grammar, tags=None, start=None, whitelist=None,
 		Prob beam_beta=0.0, int beam_delta=50, itemsestimate=None,
-		postagging=None):
+		postagging=None, pruning=None):
 	"""PCFG parsing using CKY.
 
 	:param sent: A sequence of tokens that will be parsed.
@@ -442,18 +442,18 @@ def parse(sent, Grammar grammar, tags=None, start=None, whitelist=None,
 		chart = DenseCFGChart(grammar, sent, start)
 		return parse_grammarloop[DenseCFGChart](
 				sent, <DenseCFGChart>chart, tags, beam_beta, beam_delta,
-				postagging)
+				postagging, pruning)
 	chart = SparseCFGChart(grammar, sent, start, itemsestimate=itemsestimate)
 	if whitelist is None:
 		return parse_grammarloop[SparseCFGChart](
 				sent, <SparseCFGChart>chart, tags, beam_beta, beam_delta,
-				postagging)
+				postagging, pruning)
 	return parse_leftchildloop(
 			sent, chart, tags, whitelist, beam_beta, beam_delta, postagging)
 
 
 cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
-		Prob beam_beta, int beam_delta, postagging):
+		Prob beam_beta, int beam_delta, postagging, pruning):
 	"""A CKY parser modeled after Bodenstab's 'fast grammar loop'."""
 	cdef:
 		Grammar grammar = chart.grammar
@@ -469,12 +469,18 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		ItemNo lastidx
 		size_t nts = grammar.nonterminals
 		bint usemask = grammar.mask.size() != 0
+		vector[bint] openspan
 	# Create matrices to track minima and maxima for binary splits.
 	n = (lensent + 1) * nts + 1
 	midfilter.minleft.resize(n, -1)
 	midfilter.maxright.resize(n, -1)
 	midfilter.maxleft.resize(n, lensent + 1)
 	midfilter.minright.resize(n, lensent + 1)
+
+	if pruning:
+		openspan = pruning.openspan
+	else:
+		openspan = [True for _ in range(lensent)]
 
 	if beam_beta:
 		chart.beambuckets.resize(
@@ -489,6 +495,8 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 	for span in range(2, lensent + 1):
 		# constituents from left to right
 		for left in range(lensent - span + 1):
+			if not openspan[left]:
+				continue
 			right = left + span
 			if CFGChart_fused is DenseCFGChart:
 				cell = cellidx(left, right, lensent, nts)

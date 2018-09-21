@@ -6,6 +6,7 @@ from flair.models import SequenceTagger
 from flair.training_utils import clear_embeddings
 import torch
 import warnings
+import os
 
 
 def bracketannotation(tree: Tree, sent):
@@ -25,6 +26,9 @@ class SequenceTaggerWithProbs(SequenceTagger):
 		self.goal_tag_ids \
 			= [self.tag_dictionary.get_idx_for_item(t) for t in goal_tags]
 		self.selection_tensor = torch.tensor(self.goal_tag_ids)
+
+	def foo(self, sentence: List[str]):
+		return self.predictprobs(Sentence(' '.join(sentence)))
 
 	def predictprobs(self, sentences: Union[List[Sentence], Sentence], mini_batch_size=32) -> List[
 		Sentence]:
@@ -136,3 +140,11 @@ def pruning_training(pruningdir):
 
 	trainer.train(pruningdir, learning_rate=0.1, mini_batch_size=32,
 			max_epochs=150)
+	tagger.set_goal_tags(["True", "False"])
+	return tagger
+
+
+def loadmodel(pruningdir):
+	tagger = SequenceTaggerWithProbs.load_from_file(os.path.join(pruningdir, "best-model.pt"))
+	tagger.set_goal_tags(["True", "False"])
+	return tagger

@@ -146,6 +146,18 @@ class DictObj(object):
 PARAMS = DictObj()  # used for multiprocessing when using CLI of this module
 
 
+class PruningMask:
+	def __init__(self):
+		self.openspan = []
+		self.closespan = []
+
+
+class PruningPrm:
+	def __init__(self, obtagger, cbtagger):
+		self.obtagger = obtagger
+		self.cbtagger = cbtagger
+
+
 class Parser(object):
 	"""A coarse-to-fine parser based on a given set of parameters.
 
@@ -335,6 +347,13 @@ class Parser(object):
 				if not sent:
 					pass
 				elif stage.mode == 'pcfg':
+					if stage.pruningprm:
+						pruningmask = PruningMask()
+						_s = stage.pruningprm.obtagger.foo(sent)[0]
+						pruningmask.openspan = [t.get_tag('ob') == 'True' for t in _s]
+						pruningmask.closespan = [True for _ in sent]
+					else:
+						pruningmask = None
 					chart, msg1 = pcfg.parse(
 							sent, stage.grammar, tags=tags, start=root,
 							whitelist=whitelist if stage.prune else None,
@@ -342,7 +361,8 @@ class Parser(object):
 							beam_delta=stage.beam_delta,
 							itemsestimate=estimateitems(
 								sent, stage.prune, stage.mode, stage.dop),
-							postagging=self.postagging)
+							postagging=self.postagging,
+							pruning=pruningmask)
 				elif stage.mode == 'plcfrs':
 					chart, msg1 = plcfrs.parse(
 							sent, stage.grammar, tags=tags, start=root,
