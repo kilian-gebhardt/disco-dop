@@ -146,16 +146,13 @@ class DictObj(object):
 PARAMS = DictObj()  # used for multiprocessing when using CLI of this module
 
 
-class PruningMask:
-	def __init__(self):
-		self.openspan = []
-		self.closespan = []
-
-
 class PruningPrm:
 	def __init__(self, obtagger, cbtagger):
 		self.obtagger = obtagger
 		self.cbtagger = cbtagger
+		self.pruningmasks = None
+		self.obthreshold = 0.9
+		self.cbthreshold = 0.9
 
 
 class Parser(object):
@@ -254,7 +251,7 @@ class Parser(object):
 		self.cnt = 0
 
 	def parse(self, sent, tags=None, root=None, goldtree=None,
-			require=(), block=()):
+			require=(), block=(), pruningmask=None):
 		"""Parse a sentence and perform postprocessing.
 
 		Yields a dictionary from parse trees to probabilities for each stage.
@@ -306,7 +303,7 @@ class Parser(object):
 		partialparse = False
 		# parse with each coarse-to-fine stage
 		for n, stage in enumerate(self.stages):
-			begin = time.clock()
+			begin = time.perf_counter()
 			noparse = False
 			parsetrees = fragments = None
 			golditems = 0
@@ -335,25 +332,18 @@ class Parser(object):
 							goldtree.copy(True), self.stages[prevn].markorigin)
 				if n > 0 and stage.prune and stage.mode not in (
 						'dop-rerank', 'mc-rerank'):
-					beginprune = time.clock()
+					beginprune = time.perf_counter()
 					whitelist, msg1 = prunechart(
 							charts[stage.prune], stage.grammar, stage.k,
 							splitprune, self.stages[prevn].markorigin,
 							stage.mode.startswith('pcfg'),
 							set(require or ()), set(block or ()))
-					msg += '%s; %gs\n\t' % (msg1, time.clock() - beginprune)
+					msg += '%s; %gs\n\t' % (msg1, time.perf_counter() - beginprune)
 				else:
 					whitelist = None
 				if not sent:
 					pass
 				elif stage.mode == 'pcfg':
-					if stage.pruningprm:
-						pruningmask = PruningMask()
-						_s = stage.pruningprm.obtagger.foo(sent)[0]
-						pruningmask.openspan = [t.get_tag('ob') == 'True' for t in _s]
-						pruningmask.closespan = [True for _ in sent]
-					else:
-						pruningmask = None
 					chart, msg1 = pcfg.parse(
 							sent, stage.grammar, tags=tags, start=root,
 							whitelist=whitelist if stage.prune else None,
@@ -422,7 +412,7 @@ class Parser(object):
 			# do disambiguation of resulting parse forest
 			if (sent and chart and stage.mode not in ('dop-rerank', 'mc-rerank')
 					and not (self.relationalrealizational and stage.split)):
-				begindisamb = time.clock()
+				begindisamb = time.perf_counter()
 				disambiguation.getderivations(
 						chart, stage.m,
 						derivstrings=stage.dop not in ('doubledop', 'dop1')
@@ -453,7 +443,7 @@ class Parser(object):
 						require=set(require or ()),
 						block=set(block or ()))
 				msg += 'disambiguation: %s, %gs\n\t' % (
-						msg1, time.clock() - begindisamb)
+						msg1, time.perf_counter() - begindisamb)
 				if self.verbosity >= 3:
 					besttrees = nlargest(
 							100, parsetrees, key=itemgetter(1))
@@ -543,7 +533,7 @@ class Parser(object):
 						stage, xsent, tags, lastsuccessfulparse, n)
 				parsetrees = [(lastsuccessfulparse or str(parsetree),
 						prob, None)]
-			elapsedtime = time.clock() - begin
+			elapsedtime = time.perf_counter() - begin
 			msg += '%.2fs cpu time elapsed\n' % (elapsedtime)
 			yield DictObj(name=stage.name, parsetree=parsetree, prob=prob,
 					parsetrees=parsetrees, fragments=fragments,
@@ -958,7 +948,7 @@ def worker(args):
 	line = line.strip()
 	if not line:
 		return '', True, 0, ''
-	begin = time.clock()
+	begin = time.perf_counter()
 	sent = line.split(' ')
 	tags = None
 	if PARAMS.usetags:
@@ -990,7 +980,7 @@ def worker(args):
 					comment=('prob=%.16g' % prob)
 						if PARAMS.printprob else None))
 		output += ''.join(tmp)
-	sec = time.clock() - begin
+	sec = time.perf_counter() - begin
 	msg += '\n%g s' % sec
 	return output, result.noparse, sec, msg
 

@@ -4,6 +4,7 @@ from typing import List, Union
 from flair.data import Sentence, Token
 from flair.models import SequenceTagger
 from flair.training_utils import clear_embeddings
+from collections import OrderedDict
 import torch
 import warnings
 import os
@@ -57,7 +58,10 @@ class SequenceTaggerWithProbs(SequenceTagger):
 				predicted_tag = self.goal_tags[pred_id]
 				# self.tag_dictionary.get_item_for_index(pred_id)
 				token.add_tag(self.tag_type, predicted_tag)
-				token.tag_prob = probs.data[pred_id].item()
+				try:
+					token.tag_prob[self.tag_type] = probs.data[pred_id].item()
+				except AttributeError:
+					token.tag_prob = {self.tag_type: probs.data[pred_id].item()}
 
 		return sentences
 
@@ -104,13 +108,38 @@ class SequenceTaggerWithProbs(SequenceTagger):
 		return model
 
 
-def pruning_training(pruningdir):
+class PruningMask:
+	def __init__(self):
+		self.openbracket = []
+		self.closebracket = []
+
+
+def predictpruningmask(testset: OrderedDict, obtagger: SequenceTaggerWithProbs,
+			cbtagger: SequenceTaggerWithProbs, obthreshold: float,
+			cbthreshold: float):
+	pruningmasks: OrderedDict[int, PruningMask] \
+		= OrderedDict((n, PruningMask()) for (n, _) in testset.items())
+	sentences = OrderedDict((n, Sentence(' '.join([w for w, _ in sent])))
+							for (n, (_, _, sent, _)) in testset.items())
+	sentences_list = [s for _, s in sentences.items()]
+	obtagger.predictprobs(sentences_list)
+	cbtagger.predictprobs(sentences_list)
+	for n in pruningmasks:
+		sent = sentences[n]
+		# only block bracket if confidence is above threshold
+		pruningmasks[n].openbracket = [t.get_tag(obtagger.tag_type) == 'True'
+				or t.tag_prob[obtagger.tag_type] < obthreshold for t in sent]
+		pruningmasks[n].closebracket = [t.get_tag(cbtagger.tag_type) == 'True'
+				or t.tag_prob[cbtagger.tag_type] < cbthreshold for t in sent]
+	return pruningmasks
+
+
+def pruning_training(pruningdir, tag_type, max_epochs=150):
 	logging.info("Starting pruning training")
 	from flair.data_fetcher import NLPTaskDataFetcher
 	columns = {0: 'text', 1: 'ob', 2: 'cb'}
 	corpus = NLPTaskDataFetcher.fetch_column_corpus(pruningdir, columns,
 			train_file='train.txt', dev_file="dev.txt", test_file="test.txt")
-	tag_type = 'ob'
 	logging.info("Reading corpus from %s" % pruningdir)
 	tag_dict = corpus.make_tag_dictionary(tag_type=tag_type)
 
@@ -126,25 +155,24 @@ def pruning_training(pruningdir):
 
 	embeddings: StackedEmbeddings = StackedEmbeddings(embeddings=embedding_types)
 
-	from flair.models import SequenceTagger
-
 	tagger: SequenceTaggerWithProbs = SequenceTaggerWithProbs(hidden_size=256,
-		embeddings=embeddings, tag_dictionary=tag_dict, tag_type=tag_type,
-		use_crf=False)
+			embeddings=embeddings, tag_dictionary=tag_dict, tag_type=tag_type,
+			use_crf=False)
 
 	from flair.trainers import SequenceTaggerTrainer
 
-	trainer: SequenceTaggerTrainer = SequenceTaggerTrainer(tagger,
-														corpus,
-														test_mode=True)
+	trainer: SequenceTaggerTrainer = SequenceTaggerTrainer(tagger, corpus,
+			test_mode=True)
 
-	trainer.train(pruningdir, learning_rate=0.1, mini_batch_size=32,
-			max_epochs=150)
+	trainer.train(os.path.join(pruningdir, tag_type + "model"),
+			learning_rate=0.1, mini_batch_size=32, max_epochs=max_epochs)
 	tagger.set_goal_tags(["True", "False"])
 	return tagger
 
 
-def loadmodel(pruningdir):
-	tagger = SequenceTaggerWithProbs.load_from_file(os.path.join(pruningdir, "best-model.pt"))
+def loadmodel(pruningdir, tag_type):
+	path = os.path.join(os.path.join(pruningdir, tag_type + "model"),
+			"best-model.pt")
+	tagger = SequenceTaggerWithProbs.load_from_file(path)
 	tagger.set_goal_tags(["True", "False"])
 	return tagger

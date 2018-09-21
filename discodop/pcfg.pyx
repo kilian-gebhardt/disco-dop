@@ -469,7 +469,7 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		ItemNo lastidx
 		size_t nts = grammar.nonterminals
 		bint usemask = grammar.mask.size() != 0
-		vector[bint] openspan
+		vector[bint] openbracket, closebracket
 	# Create matrices to track minima and maxima for binary splits.
 	n = (lensent + 1) * nts + 1
 	midfilter.minleft.resize(n, -1)
@@ -478,9 +478,15 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 	midfilter.minright.resize(n, lensent + 1)
 
 	if pruning:
-		openspan = pruning.openspan
+		openbracket = pruning.openbracket
+		closebracket = pruning.closebracket
+
+		# always allow span for complete sentence
+		openbracket[0] = True
+		closebracket[lensent - 1] = True
 	else:
-		openspan = [True for _ in range(lensent)]
+		openbracket = [True for _ in range(lensent)]
+		closebracket = [True for _ in range(lensent)]
 
 	if beam_beta:
 		chart.beambuckets.resize(
@@ -495,9 +501,11 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 	for span in range(2, lensent + 1):
 		# constituents from left to right
 		for left in range(lensent - span + 1):
-			if not openspan[left]:
+			if not openbracket[left]:
 				continue
 			right = left + span
+			if not closebracket[right - 1]:
+				continue
 			if CFGChart_fused is DenseCFGChart:
 				cell = cellidx(left, right, lensent, nts)
 			elif CFGChart_fused is SparseCFGChart:

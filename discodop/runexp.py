@@ -174,6 +174,8 @@ def startexp(
 	top = roots.pop()
 	funcclassifier = None
 
+	prm.pruningprm = None
+
 	if rerun:
 		parser.readgrammars(resultdir, prm.stages, prm.postagging,
 				prm.transformations, top)
@@ -184,9 +186,10 @@ def startexp(
 		# TODO: load pruning stuff
 		if prm.stages[0].split:
 			from .pruning import loadmodel
-			obtagger = loadmodel(os.path.join(resultdir, "pruning"))
+			obtagger = loadmodel(os.path.join(resultdir, "pruning"), 'ob')
+			cbtagger = loadmodel(os.path.join(resultdir, "pruning"), 'cb')
 			logging.info(obtagger.tag_dictionary.idx2item)
-			prm.stages[0].pruningprm = parser.PruningPrm(obtagger, None)
+			prm.pruningprm = parser.PruningPrm(obtagger, cbtagger)
 
 	else:
 		logging.info('read training & test corpus')
@@ -261,8 +264,9 @@ def startexp(
 			with open(pruningdev, mode='w') as _:
 				pass
 
-			obtagger = pruning_training(pruningdir)
-			prm.stages[0].pruningprm = parser.PruningPrm(obtagger, None)
+			obtagger = pruning_training(pruningdir, 'ob', max_epochs=20)
+			cbtagger = pruning_training(pruningdir, 'cb', max_epochs=20)
+			prm.pruningprm = parser.PruningPrm(obtagger, cbtagger)
 
 
 	evalparam = evalmod.readparam(prm.evalparam)
@@ -271,14 +275,14 @@ def startexp(
 	deletelabel = evalparam.get('DELETE_LABEL', ())
 	deleteword = evalparam.get('DELETE_WORD', ())
 
-	begin = time.clock()
+	begin = time.perf_counter()
 	theparser = parser.Parser(prm, funcclassifier=funcclassifier)
 	results = doparsing(parser=theparser, testset=testset, resultdir=resultdir,
 			usetags=usetags, numproc=prm.numproc, deletelabel=deletelabel,
 			deleteword=deleteword, corpusfmt=prm.corpusfmt,
 			morphology=prm.morphology, evalparam=evalparam)
 	if prm.numproc == 1:
-		logging.info('time elapsed during parsing: %gs', time.clock() - begin)
+		logging.info('time elapsed during parsing: %gs', time.perf_counter() - begin)
 	for result in results:
 		nsent = len(result.parsetrees)
 		overcutoff = any(len(a) > evalparam['CUTOFF_LEN']
@@ -630,6 +634,17 @@ def doparsing(**kwds):
 				totalgolditems=dict.fromkeys(params.testset, 0),
 				elapsedtime=dict.fromkeys(params.testset),
 				evaluator=evalmod.Evaluator(params.evalparam), noparse=0)
+
+	# TODO pruning predictions in batch mode
+	if params.parser.stages[0].split and params.parser.prm.pruningprm:
+		pruningprm = params.parser.prm.pruningprm
+		c = time.perf_counter()
+		from .pruning import predictpruningmask
+		pruningprm.pruningmasks = predictpruningmask(params.testset,
+				pruningprm.obtagger, pruningprm.cbtagger,
+				pruningprm.obthreshold, pruningprm.cbthreshold)
+		logging.info("Predicted pruning masks in %fs" % (time.perf_counter() - c))
+
 	if params.numproc == 1:
 		initworker(params)
 		dowork = (worker(a) for a in params.testset.items())
@@ -735,7 +750,9 @@ def worker(args):
 	prm = INTERNALPARAMS
 	results = list(prm.parser.parse(sent,
 			tags=[t for _, t in tagged_sent] if prm.usetags else None,
-			goldtree=goldtree))  # only used to determine quality of pruning
+			goldtree=goldtree,  # only used to determine quality of pruning
+			pruningmask=prm.parser.prm.pruningprm.pruningmasks[nsent]
+			if prm.parser.prm.pruningprm else None))
 	return (nsent, sent, results)
 
 
@@ -942,14 +959,14 @@ def parsetepacoc(
 		if cat == 'baseline':
 			continue
 		logging.info('category: %s', cat)
-		begin = time.clock()
+		begin = time.perf_counter()
 		results[cat] = doparsing(parser=theparser, testset=testset,
 				resultdir=resultdir, usetags=True, numproc=numproc,
 				category=cat)
 		cnt += len(testset[0])
 		if numproc == 1:
 			logging.info('time elapsed during parsing: %g',
-					time.clock() - begin)
+					time.perf_counter() - begin)
 		# else:  # wall clock time here
 	goldbrackets = Counter()
 	totresults = [parser.DictObj(name=stage.name) for stage in stages]
