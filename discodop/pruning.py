@@ -165,7 +165,7 @@ def pruning_training(pruningdir, tag_type, max_epochs=150):
 			test_mode=True)
 
 	trainer.train(os.path.join(pruningdir, tag_type + "model"),
-			learning_rate=0.1, mini_batch_size=32, max_epochs=max_epochs)
+			learning_rate=0.1, mini_batch_size=32, max_epochs=max_epochs, embeddings_in_memory=False)
 	tagger.set_goal_tags(["True", "False"])
 	return tagger
 

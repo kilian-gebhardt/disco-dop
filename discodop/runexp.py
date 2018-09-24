@@ -175,6 +175,8 @@ def startexp(
 	funcclassifier = None
 
 	prm.pruningprm = None
+	
+	trainpruningmodels = not rerun	
 
 	if rerun:
 		parser.readgrammars(resultdir, prm.stages, prm.postagging,
@@ -186,10 +188,19 @@ def startexp(
 		# TODO: load pruning stuff
 		if prm.stages[0].split:
 			from .pruning import loadmodel
-			obtagger = loadmodel(os.path.join(resultdir, "pruning"), 'ob')
-			cbtagger = loadmodel(os.path.join(resultdir, "pruning"), 'cb')
-			logging.info(obtagger.tag_dictionary.idx2item)
-			prm.pruningprm = parser.PruningPrm(obtagger, cbtagger)
+			pruningpath = os.path.join(resultdir, "pruning")
+			try:
+				obtagger = loadmodel(pruningpath, 'ob')
+				cbtagger = loadmodel(pruningpath, 'cb')
+				logging.info(obtagger.tag_dictionary.idx2item)
+				prm.pruningprm = parser.PruningPrm(obtagger, cbtagger)
+			except FileNotFoundError:
+				trainpruningmodels = True
+
+				trees, sentsoriginal, _ = loadtraincorpus(
+						prm.corpusfmt, prm.traincorpus, prm.binarization, prm.punct,
+						prm.functions, prm.morphology, prm.removeempty, prm.ensureroot,
+						prm.transformations, prm.relationalrealizational, resultdir)
 
 	else:
 		logging.info('read training & test corpus')
@@ -208,6 +219,7 @@ def startexp(
 				prm.numproc, lexmodel, top)
 
 		#TODO train pruning stuff
+	if trainpruningmodels:
 		if prm.stages[0].split:
 			stage = prm.stages[0]
 
@@ -243,10 +255,11 @@ def startexp(
 				pruning_training
 
 			traintrees = preparetrees(trees, sentsoriginal)
-			with io.open(pruningtraintrees, 'w', encoding='utf8') as out:
-				out.writelines(treebank.writetree(
-					traintree, sent, n, prm.corpusfmt,
-					morphology=prm.morphology) for n, (traintree, sent) in enumerate(zip(traintrees, sentsoriginal)))
+			if False:
+				with io.open(pruningtraintrees, 'w', encoding='utf8') as out:
+					out.writelines(treebank.writetree(
+						traintree, sent, n, prm.corpusfmt,
+						morphology=prm.morphology) for n, (traintree, sent) in enumerate(zip(traintrees, sentsoriginal)))
 			with open(pruningtrain, mode='w') as trainfile:
 				for t, s in zip(preparetrees(trees, sentsoriginal), sentsoriginal):
 					annotation2file(bracketannotation(t, s), trainfile)
@@ -254,10 +267,11 @@ def startexp(
 			testsents = [[w for w, _ in sent] for _,(_, _, sent,_) in testset.items()]
 			logging.info(str(testsents[0]))
 			testtrees = preparetrees(testtrees, testsents)
-			with io.open(pruningtesttrees, 'w', encoding='utf8') as out:
-				out.writelines(treebank.writetree(
-					testtree, sent, n, prm.corpusfmt,
-					morphology=prm.morphology) for n, (testtree, sent) in enumerate(zip(testtrees, testsents)))
+			if False:
+				with io.open(pruningtesttrees, 'w', encoding='utf8') as out:
+					out.writelines(treebank.writetree(
+						testtree, sent, n, prm.corpusfmt,
+						morphology=prm.morphology) for n, (testtree, sent) in enumerate(zip(testtrees, testsents)))
 			with open(pruningtest, mode='w') as testfile:
 				for t, s in zip(testtrees, testsents):
 					annotation2file(bracketannotation(t, s), testfile)
