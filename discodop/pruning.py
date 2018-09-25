@@ -63,6 +63,8 @@ class SequenceTaggerWithProbs(SequenceTagger):
 				except AttributeError:
 					token.tag_prob = {self.tag_type: probs.data[pred_id].item()}
 
+			clear_embeddings(sentences)
+
 		return sentences
 
 	def _predict_probs_batch(self, sentences: List[Sentence]):
