@@ -119,6 +119,8 @@ class PruningMask:
 def predictpruningmask(testset: OrderedDict, obtagger: SequenceTaggerWithProbs,
 			cbtagger: SequenceTaggerWithProbs, obthreshold: float,
 			cbthreshold: float):
+	obtagger.eval()
+	cbtagger.eval()
 	pruningmasks: OrderedDict[int, PruningMask] \
 		= OrderedDict((n, PruningMask()) for (n, _) in testset.items())
 	sentences = OrderedDict((n, Sentence(' '.join([w for w, _ in sent])))
