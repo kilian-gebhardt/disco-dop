@@ -213,10 +213,11 @@ def startexp(
 			joblib.dump(funcclassifier, '%s/funcclassifier.pickle' % resultdir,
 					compress=3)
 			logging.info(msg)
-		getgrammars(dobinarization(trees, sents, prm.binarization,
+
+		getgrammars(dobinarization([t.copy(True) for t in trees], sents, prm.binarization,
 					prm.relationalrealizational),
-				sents, prm.stages, prm.testcorpus.maxwords, resultdir,
-				prm.numproc, lexmodel, top)
+					sents, prm.stages, prm.testcorpus.maxwords, resultdir,
+					prm.numproc, lexmodel, top)
 
 		#TODO train pruning stuff
 	if trainpruningmodels:
@@ -261,9 +262,8 @@ def startexp(
 						traintree, sent, n, prm.corpusfmt,
 						morphology=prm.morphology) for n, (traintree, sent) in enumerate(zip(traintrees, sentsoriginal)))
 			with open(pruningtrain, mode='w') as trainfile:
-				for t, s in zip(preparetrees(trees, sentsoriginal), sentsoriginal):
+				for t, s in zip(preparetrees(traintrees, sentsoriginal), sentsoriginal):
 					annotation2file(bracketannotation(t, s), trainfile)
-			testtrees = [t for _, (_,t,_,_) in testset.items()]
 			testsents = [[w for w, _ in sent] for _,(_, _, sent,_) in testset.items()]
 			logging.info(str(testsents[0]))
 			testtrees = preparetrees(testtrees, testsents)
