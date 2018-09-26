@@ -722,7 +722,7 @@ cdef class FixedVocabulary(Vocabulary):
 
 
 # defined here because circular import.
-cdef inline size_t cellidx(short start, short end, short lensent,
+cpdef inline size_t cellidx(short start, short end, short lensent,
 		Label nonterminals):
 	"""Return an index to a triangular array, given start < end.
 	The result of this function is the index to chart[start][end][0]."""
