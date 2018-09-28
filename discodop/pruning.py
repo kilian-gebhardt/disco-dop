@@ -5,6 +5,10 @@ from flair.data import Sentence
 from flair.models import SequenceTagger
 from collections import OrderedDict
 import os
+from .pcfg import DenseCFGChart
+from .punctuation import punctprune, applypunct
+from . import treetransforms, treebanktransforms
+from .treetransforms import binarizetree
 
 
 def bracketannotation(tree: Tree, sent):
@@ -91,3 +95,42 @@ def loadmodel(pruningdir, tag_type):
 			"best-model.pt")
 	tagger = SequenceTagger.load_from_file(path)
 	return tagger
+
+
+def beamwidths(chart: DenseCFGChart, goldtree, sent, prm, beam: float):
+	# TODO test
+	# reproduce preprocessing so that gold items can be counted
+	goldtree = goldtree.copy(True)
+	applypunct(prm.punct, goldtree, sent[:])
+	if prm.transformations:
+		treebanktransforms.transform(goldtree, sent, prm.transformations)
+	binarizetree(goldtree, prm.binarization, prm.relationalrealizational)
+	treetransforms.addfanoutmarkers(goldtree)
+
+	# todo: ask Andreas about markorigin
+
+	goldtree = treetransforms.splitdiscnodes(goldtree.copy(True),
+			prm.stages[0].markorigin)
+
+	from .tree import DrawTree
+	logging.info(DrawTree(goldtree, sent))
+
+	for node in goldtree.subtrees():
+		logging.info("%s %s %d" % (node.label, str(node.leaves()), chart.itemid(node.label, node.leaves())))
+	golditems = [chart.itemid(node.label, node.leaves())
+				for node in goldtree.subtrees()]
+
+	goldbeams = {}
+
+	for item in golditems:
+		cell = item // prm.stages[0].grammar.nonterminals
+		bestitemprob = chart.getbeambucket(cell) - beam
+		golditemprob = chart._subtreeprob(item)
+		goldbeam = bestitemprob - golditemprob
+		logging.info("%d: beambucket: %f gold: %f beam: %f goldbeam: %f" % (cell, chart.getbeambucket(cell), golditemprob, beam, goldbeam))
+		try:
+			goldbeams[cell] = max(goldbeams[cell], goldbeam)
+		except KeyError:
+			goldbeams[cell] = goldbeam
+
+	return goldbeams

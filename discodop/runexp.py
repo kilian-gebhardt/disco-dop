@@ -283,6 +283,81 @@ def startexp(
 			cbtagger = pruning_training(pruningdir, 'cb', max_epochs=20)
 			prm.pruningprm = parser.PruningPrm(obtagger, cbtagger)
 
+			trainbeamwidthprediction = True
+
+			if trainbeamwidthprediction:
+				from .pruning import beamwidths
+				from .pcfg import parse
+				from .parser import estimateitems, escape, ptbescape, replaceraretestwords
+
+				# first collect training data by parsing the training corpus
+				trainsettb = treebank.READERS[prm.corpusfmt](
+					prm.traincorpus.path, encoding=prm.traincorpus.encoding,
+					headrules=prm.binarization.headrules,
+					removeempty=prm.removeempty, morphology=prm.morphology,
+					functions=prm.functions, ensureroot=prm.ensureroot)
+
+				_train_blocks = OrderedDict()
+				_train_trees = OrderedDict()
+				_train_tagged_sents = OrderedDict()
+				for n, item in trainsettb.itertrees(prm.traincorpus.skip, prm.traincorpus.skip + prm.traincorpus.numsents):
+					if 1 <= len(item.sent) <= prm.traincorpus.maxwords:
+						_train_blocks[n] = item.block
+						_train_trees[n] = item.tree
+						_train_tagged_sents[n] = [(word, tag) for word, (_, tag)
+												in zip(item.sent, sorted(item.tree.pos()))]
+
+				_train_tagged_sents_mangled = _train_tagged_sents
+				_trainset = OrderedDict((n, (
+								_train_tagged_sents_mangled[n],
+								_train_trees[n],
+								_train_tagged_sents[n], block))
+									for n, block in _train_blocks.items())
+
+				from .parser import punctprune, alignsent
+
+				def generatebeamdata(treeset, path):
+					with open(path, 'w') as beamfile:
+						for _, (tagged_sent, tree, _, _) in treeset.items():
+							sent = [w for w,_ in tagged_sent]
+							tags = [t for _, t in tagged_sent] if usetags else None
+							if 'PUNCT-PRUNE' in (prm.transformations or ()):
+								origsent = sent[:]
+								punctprune(None, sent)
+								if tags:
+									newtags = alignsent(sent, origsent, dict(enumerate(tags)))
+									tags = [newtags[n] for n, _ in enumerate(sent)]
+							if 'PTBbrackets' in (prm.transformations or ()):
+								sent = [ptbescape(token) for token in sent]
+							else:
+								sent = [escape(token) for token in sent]
+							if prm.postagging and prm.postagging.method == 'unknownword':
+								sent = list(replaceraretestwords(sent,
+																 prm.postagging.unknownwordfun,
+																 prm.postagging.lexicon,
+																 prm.postagging.sigs))
+							if tags is not None:
+								tags = list(tags)
+							logging.info(str(sent))
+							chart, msg = parse(
+								sent, stage.grammar,
+								tags=tags,
+								start=top,
+								whitelist=None,
+								beam_beta=-log(stage.beam_beta),
+								beam_delta=stage.beam_delta,
+								itemsestimate=estimateitems(
+									sent, stage.prune, stage.mode, stage.dop),
+								postagging=prm.postagging,
+								pruning=None)
+							goldbeam = beamwidths(chart, tree, sent, prm, -log(stage.beam_beta))
+							beamfile.write(str(goldbeam) + '\n')
+
+				trainbeamspath = os.path.join(pruningdir, 'trainbeams.txt')
+				generatebeamdata(_trainset, trainbeamspath)
+
+				testbeamspath = os.path.join(pruningdir, 'testbeams.txt')
+				generatebeamdata(testset, testbeamspath)
 
 	evalparam = evalmod.readparam(prm.evalparam)
 	evalparam['DEBUG'] = -1

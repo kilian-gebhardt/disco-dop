@@ -69,6 +69,9 @@ cdef class DenseCFGChart(CFGChart):
 		return cellidx(0, self.lensent, self.lensent,
 			self.grammar.nonterminals) + self.start
 
+	cpdef Prob getbeambucket(self, size_t cell):
+		return self.beambuckets[cell]
+
 	def bestsubtree(self, start, end):
 		cdef Prob bestprob = INFINITY, prob
 		cdef uint64_t bestitem = 0
@@ -156,7 +159,7 @@ cdef class DenseCFGChart(CFGChart):
 		cdef uint64_t item = itemidx
 		return item % self.grammar.nonterminals
 
-	cdef Prob _subtreeprob(self, uint64_t item):
+	cpdef Prob _subtreeprob(self, uint64_t item):
 		"""Get viterbi / inside probability of a subtree headed by `item`."""
 		return self.probs[item]
 
