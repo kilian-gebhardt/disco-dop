@@ -255,7 +255,7 @@ def startexp(
 			from .pruning import bracketannotation, annotation2file, \
 				pruning_training
 
-			traintrees = preparetrees(trees, sentsoriginal)
+			traintrees = preparetrees([t.copy(True) for t in trees], sentsoriginal)
 			if False:
 				with io.open(pruningtraintrees, 'w', encoding='utf8') as out:
 					out.writelines(treebank.writetree(
@@ -264,6 +264,7 @@ def startexp(
 			with open(pruningtrain, mode='w') as trainfile:
 				for t, s in zip(preparetrees(traintrees, sentsoriginal), sentsoriginal):
 					annotation2file(bracketannotation(t, s), trainfile)
+			testtrees = [t.copy(True) for _, (_, t, _, _) in testset.items()]
 			testsents = [[w for w, _ in sent] for _,(_, _, sent,_) in testset.items()]
 			logging.info(str(testsents[0]))
 			testtrees = preparetrees(testtrees, testsents)
