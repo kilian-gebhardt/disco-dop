@@ -9,6 +9,8 @@ from .pcfg import DenseCFGChart
 from .punctuation import punctprune, applypunct
 from . import treetransforms, treebanktransforms
 from .treetransforms import binarizetree
+from .containers import cellstart
+from .containers import cellend
 
 
 def bracketannotation(tree: Tree, sent):
@@ -63,7 +65,7 @@ def pruning_training(pruningdir, tag_type, max_epochs=150, use_crf=False):
 	logging.info("Reading corpus from %s" % pruningdir)
 	tag_dict = corpus.make_tag_dictionary(tag_type=tag_type)
 
-	logging.info(str(tag_dict.idx2item))
+	logging.log(4, str(tag_dict.idx2item))
 
 	from flair.embeddings import TokenEmbeddings, WordEmbeddings, \
 		StackedEmbeddings, CharLMEmbeddings
@@ -113,10 +115,13 @@ def beamwidths(chart: DenseCFGChart, goldtree, sent, prm, beam: float):
 			prm.stages[0].markorigin)
 
 	from .tree import DrawTree
-	logging.info(DrawTree(goldtree, sent))
+	logging.log(5, DrawTree(goldtree, sent))
 
 	for node in goldtree.subtrees():
-		logging.info("%s %s %d" % (node.label, str(node.leaves()), chart.itemid(node.label, node.leaves())))
+		item = chart.itemid(node.label, node.leaves())
+		cell = item // prm.stages[0].grammar.nonterminals
+		logging.log(5, "%s %s %d %d" % (node.label, str(node.leaves()),
+			item, cell))
 	golditems = [chart.itemid(node.label, node.leaves())
 				for node in goldtree.subtrees()]
 
@@ -126,11 +131,17 @@ def beamwidths(chart: DenseCFGChart, goldtree, sent, prm, beam: float):
 		cell = item // prm.stages[0].grammar.nonterminals
 		bestitemprob = chart.getbeambucket(cell) - beam
 		golditemprob = chart._subtreeprob(item)
-		goldbeam = bestitemprob - golditemprob
-		logging.info("%d: beambucket: %f gold: %f beam: %f goldbeam: %f" % (cell, chart.getbeambucket(cell), golditemprob, beam, goldbeam))
+		if bestitemprob == float("Inf"):
+			goldbeam = bestitemprob
+		else:
+			goldbeam = golditemprob - bestitemprob
+		start = cellstart(cell, len(sent), 1)
+		end = cellend(cell, len(sent), 1)
+		logging.log(5, "%d [%d-%d]: beambucket: %f gold: %f beam: %f goldbeam: %f" % (cell, start, end, chart.getbeambucket(cell), golditemprob, beam, goldbeam))
 		try:
 			goldbeams[cell] = max(goldbeams[cell], goldbeam)
 		except KeyError:
 			goldbeams[cell] = goldbeam
+		assert not(goldbeam == float("Inf")) or end == start + 1
 
 	return goldbeams

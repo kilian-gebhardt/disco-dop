@@ -730,7 +730,7 @@ cpdef inline size_t cellidx(short start, short end, short lensent,
 			- ((start - 1) * start // 2) + end - start - 1)
 
 
-cdef inline short cellstart(size_t cell, short lensent,
+cpdef inline short cellstart(size_t cell, short lensent,
 		Label nonterminals):
 	"""Retrieve start position for a given chart cell."""
 	cell = cell // nonterminals
@@ -752,7 +752,7 @@ cdef inline short cellstart(size_t cell, short lensent,
 # 		   - sqrt(0.25 + lensent * (lensent + 1) - 2 * (cell // nonterminals)))
 
 
-cdef inline short cellend(size_t cell, short lensent,
+cpdef inline short cellend(size_t cell, short lensent,
 		Label nonterminals):
 	"""Retrieve end position for a given chart cell."""
 	cell = cell // nonterminals

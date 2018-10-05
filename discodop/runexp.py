@@ -289,6 +289,7 @@ def startexp(
 				from .pruning import beamwidths
 				from .pcfg import parse
 				from .parser import estimateitems, escape, ptbescape, replaceraretestwords
+				from .beamwidthprediction import SENTS_SUFFIX, GOLD_CELL_SUFFIX, train_model
 
 				# first collect training data by parsing the training corpus
 				trainsettb = treebank.READERS[prm.corpusfmt](
@@ -316,10 +317,11 @@ def startexp(
 
 				from .parser import punctprune, alignsent
 
-				def generatebeamdata(treeset, path):
-					with open(path, 'w') as beamfile:
+				def generatebeamdata(treeset, beampath: str, sentpath: str):
+					with open(beampath, 'w') as beamfile, \
+						open(sentpath, 'w') as sentfile:
 						for _, (tagged_sent, tree, _, _) in treeset.items():
-							sent = [w for w,_ in tagged_sent]
+							sent = origsent_ = [w for w,_ in tagged_sent]
 							tags = [t for _, t in tagged_sent] if usetags else None
 							if 'PUNCT-PRUNE' in (prm.transformations or ()):
 								origsent = sent[:]
@@ -338,7 +340,7 @@ def startexp(
 																 prm.postagging.sigs))
 							if tags is not None:
 								tags = list(tags)
-							logging.info(str(sent))
+							logging.info("Parsing: " + str(sent))
 							chart, msg = parse(
 								sent, stage.grammar,
 								tags=tags,
@@ -352,12 +354,21 @@ def startexp(
 								pruning=None)
 							goldbeam = beamwidths(chart, tree, sent, prm, -log(stage.beam_beta))
 							beamfile.write(str(goldbeam) + '\n')
+							sentfile.write(' '.join(origsent_) + '\n')
 
-				trainbeamspath = os.path.join(pruningdir, 'trainbeams.txt')
-				generatebeamdata(_trainset, trainbeamspath)
+				trainbeamspath = os.path.join(pruningdir, 'train' + GOLD_CELL_SUFFIX)
+				trainsentspath = os.path.join(pruningdir, 'train' + SENTS_SUFFIX)
+				generatebeamdata(_trainset, trainbeamspath, trainsentspath)
 
-				testbeamspath = os.path.join(pruningdir, 'testbeams.txt')
-				generatebeamdata(testset, testbeamspath)
+				testbeamspath = os.path.join(pruningdir, 'test' + GOLD_CELL_SUFFIX)
+				testsentspath = os.path.join(pruningdir, 'test' + SENTS_SUFFIX)
+				generatebeamdata(testset, testbeamspath, testsentspath)
+
+				beamwidthpredictionmodel = train_model(
+					os.path.join(pruningdir, 'train'),
+					os.path.join(pruningdir, 'test'),
+					os.path.join(pruningdir, 'beamwidthprediction'))
+
 
 	evalparam = evalmod.readparam(prm.evalparam)
 	evalparam['DEBUG'] = -1
