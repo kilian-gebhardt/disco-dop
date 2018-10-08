@@ -11,7 +11,7 @@ from . import treetransforms, treebanktransforms
 from .treetransforms import binarizetree
 from .containers import cellstart
 from .containers import cellend
-
+from . import disambiguation
 
 def bracketannotation(tree: Tree, sent):
 	spans = [t2.leaves() for t2 in tree.subtrees() if len(t2.leaves()) > 1]
@@ -28,6 +28,7 @@ class PruningMask:
 	def __init__(self):
 		self.openbracket = []
 		self.closebracket = []
+		self.dynamicbeams = []
 
 
 def predictpruningmask(testset: OrderedDict, obtagger: SequenceTagger,
@@ -100,7 +101,6 @@ def loadmodel(pruningdir, tag_type):
 
 
 def beamwidths(chart: DenseCFGChart, goldtree, sent, prm, beam: float):
-	# TODO test
 	# reproduce preprocessing so that gold items can be counted
 	goldtree = goldtree.copy(True)
 	applypunct(prm.punct, goldtree, sent[:])
@@ -127,21 +127,60 @@ def beamwidths(chart: DenseCFGChart, goldtree, sent, prm, beam: float):
 
 	goldbeams = {}
 
-	for item in golditems:
-		cell = item // prm.stages[0].grammar.nonterminals
-		bestitemprob = chart.getbeambucket(cell) - beam
-		golditemprob = chart._subtreeprob(item)
-		if bestitemprob == float("Inf"):
-			goldbeam = bestitemprob
-		else:
-			goldbeam = golditemprob - bestitemprob
-		start = cellstart(cell, len(sent), 1)
-		end = cellend(cell, len(sent), 1)
-		logging.log(5, "%d [%d-%d]: beambucket: %f gold: %f beam: %f goldbeam: %f" % (cell, start, end, chart.getbeambucket(cell), golditemprob, beam, goldbeam))
-		try:
-			goldbeams[cell] = max(goldbeams[cell], goldbeam)
-		except KeyError:
-			goldbeams[cell] = goldbeam
-		assert not(goldbeam == float("Inf")) or end == start + 1
+	def updated_goldbeam(items, beams):
+		_counter = 0
+		for item in items:
+			cell = item // prm.stages[0].grammar.nonterminals
+			start = cellstart(cell, len(sent), 1)
+			end = cellend(cell, len(sent), 1)
+			# bestitemprob = chart.getbeambucket(cell) - beam
+			bestitem = chart.bestsubtree(start, end, skipsplit=False)
+			bestitemprob = chart._subtreeprob(bestitem)
+			golditemprob = chart._subtreeprob(item)
+			if golditemprob != float("Inf"):
+				_counter += 1
+			if bestitemprob == float("Inf"):
+				goldbeam = golditemprob
+			else:
+				goldbeam = golditemprob - bestitemprob
+			logging.log(5, "%d [%d-%d]: gold: %f beam: %f goldbeam: %f" % (cell, start, end, golditemprob, beam, goldbeam))
+			try:
+				beams[cell] = max(beams[cell], goldbeam)
+			except KeyError:
+				beams[cell] = goldbeam
+			assert bestitemprob <= golditemprob
+		return _counter
 
-	return goldbeams
+	counter = updated_goldbeam(golditems, goldbeams)
+	# if gold tree not in chart, add items viterbi tree
+	if counter != len(golditems) and chart:
+		k = 1
+
+		disambiguation.getderivations(chart, k, derivstrings=True)
+		stage = prm.stages[0]
+		if stage.objective == 'shortest':
+			stage.grammar.switch('default'
+								 if stage.estimator == 'rfe'
+								 else stage.estimator, True)
+		tags = None
+		parsetrees, msg1 = disambiguation.marginalize('mpd',
+			chart, sent=sent, tags=tags,
+			k=stage.m, sldop_n=stage.sldop_n,
+			mcplambda=stage.mcplambda,
+			mcplabels=stage.mcplabels,
+			ostag=stage.dop == 'ostag',
+			require=set(),
+			block=set())
+
+		from operator import itemgetter
+		from .tree import ParentedTree
+
+		resultstr, prob, fragments = max(parsetrees, key=itemgetter(1))
+		parsetree = ParentedTree(resultstr)
+
+		viterbiitems = [chart.itemid(node.label, node.leaves())
+						 for node in parsetree.subtrees()]
+
+		updated_goldbeam(viterbiitems, goldbeams)
+
+	return goldbeams, counter == len(golditems)

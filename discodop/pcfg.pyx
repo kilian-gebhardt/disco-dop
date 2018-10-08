@@ -72,14 +72,14 @@ cdef class DenseCFGChart(CFGChart):
 	cpdef Prob getbeambucket(self, size_t cell):
 		return self.beambuckets[cell]
 
-	def bestsubtree(self, start, end):
+	def bestsubtree(self, start, end, skipsplit=True):
 		cdef Prob bestprob = INFINITY, prob
 		cdef uint64_t bestitem = 0
 		cdef uint64_t cell = cellidx(start, end, self.lensent,
 		 	self.grammar.nonterminals)
 		for label in range(self.grammar.nonterminals):
 			if ('*' in self.grammar.tolabel[label]
-					or '<' in self.grammar.tolabel[label]):
+					or '<' in self.grammar.tolabel[label]) and skipsplit:
 				continue
 			prob = self._subtreeprob(cell + label)
 			if prob < bestprob:
@@ -473,6 +473,7 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		size_t nts = grammar.nonterminals
 		bint usemask = grammar.mask.size() != 0
 		vector[bint] openbracket, closebracket
+		vector[Prob] dynamicbeams
 	# Create matrices to track minima and maxima for binary splits.
 	n = (lensent + 1) * nts + 1
 	midfilter.minleft.resize(n, -1)
@@ -487,9 +488,11 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		# always allow span for complete sentence
 		openbracket[0] = True
 		closebracket[lensent - 1] = True
+		dynamicbeams = pruning.dynamicbeams
 	else:
 		openbracket = [True for _ in range(lensent)]
 		closebracket = [True for _ in range(lensent)]
+		dynamicbeams = []
 
 	if beam_beta:
 		chart.beambuckets.resize(
@@ -509,6 +512,9 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 			right = left + span
 			if not closebracket[right - 1]:
 				continue
+			if dynamicbeams.size() > 0:
+				beam_beta = dynamicbeams[cellidx(left, right, lensent, 1)]
+				if beam_beta == float('-Inf'): continue
 			if CFGChart_fused is DenseCFGChart:
 				cell = cellidx(left, right, lensent, nts)
 			elif CFGChart_fused is SparseCFGChart:

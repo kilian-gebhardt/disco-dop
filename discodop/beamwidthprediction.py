@@ -17,7 +17,7 @@ import logging
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from flair.training_utils import Metric, init_output_file, WeightExtractor
 from collections import OrderedDict
-
+from .pruning import PruningMask
 
 class SentenceWithChartInfo(Sentence):
 	def __init__(self, *args, **kwargs):
@@ -515,26 +515,26 @@ SENTS_SUFFIX = '_sents.txt'
 GOLD_CELL_SUFFIX = '_goldcells.txt'
 MAXBEAM = 5.0
 STEPSIZE = 0.5
-
+from math import log
 
 def defaultbags(x: Union[str, float]):
 	if x == PRUNE:
 		return PRUNE
-	if x > MAXBEAM:
+	if x > log(10**MAXBEAM):
 		return "INF"
 	if x <= 0:
 		return "E0.0"
 	else:
 		for y in range(0, int(MAXBEAM / STEPSIZE) + 1):
-			if x <= y * STEPSIZE:
+			if x <= log(10**(y * STEPSIZE)):
 				return "E%.1f" % (y * STEPSIZE)
 
 
 DEFAULTBEAMS = OrderedDict()
-DEFAULTBEAMS["PRUNE"] = 0
+DEFAULTBEAMS["PRUNE"] = float('-Inf')
 for y in range(0, int(MAXBEAM / STEPSIZE) + 1):
-	DEFAULTBEAMS["E%.1f" % (y * STEPSIZE)] = len(DEFAULTBEAMS)
-DEFAULTBEAMS["INF"] = len(DEFAULTBEAMS)
+	DEFAULTBEAMS["E%.1f" % (y * STEPSIZE)] = log(10**(y * STEPSIZE))
+DEFAULTBEAMS["INF"] = float('Inf')
 
 
 class BeamWidthsCorpusReader:
@@ -562,6 +562,8 @@ class BeamWidthsCorpusReader:
 		sentences = []
 		with open(path_to_beam_file, 'r') as beam_file, open(path_to_sentence_file) as sent_file:
 			for beamstr, sentstr in zip(beam_file, sent_file):
+				if sentstr[-1] == '\n':
+					sentstr = sentstr[:-1]
 				sent = SentenceWithChartInfo(sentstr)
 				chartsize = 1 + cellidx(len(sent) - 1, len(sent), len(sent), 1)
 				sent.chartinfo = [categories(PRUNE) for _ in range(chartsize)]
@@ -754,3 +756,17 @@ def train_model(train_prefix: str, test_prefix: str, training_path: str):
 	trainer.train(training_path, embeddings_in_memory=False, max_epochs=20)
 
 	return model
+
+
+def sentencetopruningmask(sentence: SentenceWithChartInfo):
+	mask: PruningMask = PruningMask()
+	mask.openbracket = [True for _ in sentence]
+	mask.closebracket = [True for _ in sentence]
+	dynamicbeams = mask.dynamicbeams = []
+	lensent = len(sentence)
+	idx = 0
+	for l in range(0, lensent):
+		for r in range(l + 1, lensent + 1):
+			dynamicbeams.append(DEFAULTBEAMS[sentence.chartinfo[idx]])
+			idx += 1
+	return mask

@@ -150,9 +150,13 @@ class PruningPrm:
 	def __init__(self, obtagger, cbtagger):
 		self.obtagger = obtagger
 		self.cbtagger = cbtagger
+		self.ocbpred = obtagger and cbtagger
 		self.pruningmasks = None
 		self.obthreshold = 0.9
 		self.cbthreshold = 0.9
+		self.dynamicbeams = None
+		self.pruningdir = None
+		self.beampred = False
 
 
 class Parser(object):

@@ -340,22 +340,31 @@ def startexp(
 																 prm.postagging.sigs))
 							if tags is not None:
 								tags = list(tags)
-							logging.info("Parsing: " + str(sent))
+							# logging.info("Parsing: " + str(sent))
+
+							# beam = -log(stage.beam_beta)
+							beam = 0.0
+
 							chart, msg = parse(
 								sent, stage.grammar,
 								tags=tags,
 								start=top,
 								whitelist=None,
-								beam_beta=-log(stage.beam_beta),
+								beam_beta=beam,
 								beam_delta=stage.beam_delta,
 								itemsestimate=estimateitems(
 									sent, stage.prune, stage.mode, stage.dop),
 								postagging=prm.postagging,
 								pruning=None)
-							goldbeam = beamwidths(chart, tree, sent, prm, -log(stage.beam_beta))
+							if not chart:
+								logging.info("Could not parse: " + str(sent))
+
+							goldbeam, goldinchart = beamwidths(chart, tree, sent, prm, beam)
+							if goldinchart: counter += 1
 							beamfile.write(str(goldbeam) + '\n')
 							sentfile.write(' '.join(origsent_) + '\n')
 
+						logging.info("Found gold trees for %s out of %s sentences in parse charts." % (counter, len(treeset.items())))
 				trainbeamspath = os.path.join(pruningdir, 'train' + GOLD_CELL_SUFFIX)
 				trainsentspath = os.path.join(pruningdir, 'train' + SENTS_SUFFIX)
 				generatebeamdata(_trainset, trainbeamspath, trainsentspath)
@@ -369,6 +378,9 @@ def startexp(
 					os.path.join(pruningdir, 'test'),
 					os.path.join(pruningdir, 'beamwidthprediction'))
 
+				prm.pruningprm = parser.PruningPrm(None, None)
+				prm.pruningprm.pruningdir = pruningdir
+				prm.pruningprm.beampred = True
 
 	evalparam = evalmod.readparam(prm.evalparam)
 	evalparam['DEBUG'] = -1
@@ -739,12 +751,36 @@ def doparsing(**kwds):
 	# TODO pruning predictions in batch mode
 	if params.parser.stages[0].split and params.parser.prm.pruningprm:
 		pruningprm = params.parser.prm.pruningprm
-		c = time.perf_counter()
-		from .pruning import predictpruningmask
-		pruningprm.pruningmasks = predictpruningmask(params.testset,
-				pruningprm.obtagger, pruningprm.cbtagger,
-				pruningprm.obthreshold, pruningprm.cbthreshold)
-		logging.info("Predicted pruning masks in %fs" % (time.perf_counter() - c))
+		if pruningprm.ocbpred:
+			c = time.perf_counter()
+			logging.info("Start prediction of pruning masks")
+			from .pruning import predictpruningmask
+			pruningprm.pruningmasks = predictpruningmask(params.testset,
+					pruningprm.obtagger, pruningprm.cbtagger,
+					pruningprm.obthreshold, pruningprm.cbthreshold)
+			logging.info("Predicted pruning masks in %fs" % (time.perf_counter() - c))
+		elif pruningprm.beampred:
+			from .beamwidthprediction import BeamWidthsCorpusReader, sentencetopruningmask, TaggedCorpus
+			from .pruning import PruningMask
+			logging.info("Loading gold dynamic beams")
+			corpus: TaggedCorpus = BeamWidthsCorpusReader.read_beam_width_corpus(
+				train_prefix=os.path.join(pruningprm.pruningdir, 'train'),
+				test_prefix=os.path.join(pruningprm.pruningdir, 'test'))
+			assert len(params.testset.items()) == len(corpus.test)
+			for (n, (_, _, sent, _)), sentence in zip(params.testset.items(), corpus.test):
+				assert len(sent) == len(sentence)
+				for word_pos_pair, token in zip(sent, sentence):
+					if word_pos_pair[0] != token.text:
+						print(sent)
+						print(sentence)
+						print('"%s"' % word_pos_pair[0], "vs.", '"%s"' % token.text)
+					assert word_pos_pair[0] == token.text
+			pruningprm.pruningmasks: OrderedDict[int, PruningMask] = OrderedDict(
+				(n, sentencetopruningmask(sentence))
+				for (n, _), sentence in zip(params.testset.items(), corpus.test))
+			logging.info('Gold dynamic beams: %d' % len(pruningprm.pruningmasks))
+			some_key = list(pruningprm.pruningmasks.keys())[0]
+			logging.info(pruningprm.pruningmasks[some_key].dynamicbeams[:10])
 
 	if params.numproc == 1:
 		initworker(params)
