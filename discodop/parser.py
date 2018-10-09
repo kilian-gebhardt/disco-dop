@@ -83,7 +83,8 @@ DEFAULTS = dict(
 				# grammatical functions in postprocessing step
 		evalparam='proper.prm',  # EVALB-style parameter file
 		verbosity=2,
-		numproc=1)  # increase to use multiple CPUs; None: use all CPUs.
+		numproc=1,  # increase to use multiple CPUs; None: use all CPUs.
+		pruning=None)  # choices: None, 'ocbrackets', 'dynamicbeamsgold', 'dynamicbeamspredict'
 
 DEFAULTSTAGE = dict(
 		name='stage1',  # identifier, used for filenames
@@ -150,13 +151,14 @@ class PruningPrm:
 	def __init__(self, obtagger, cbtagger):
 		self.obtagger = obtagger
 		self.cbtagger = cbtagger
-		self.ocbpred = obtagger and cbtagger
+		self.ocbpred = obtagger and cbtagger # predict opening/closing brackets
 		self.pruningmasks = None
 		self.obthreshold = 0.9
 		self.cbthreshold = 0.9
-		self.dynamicbeams = None
+		self.dynamicbeampredictor = None
 		self.pruningdir = None
-		self.beampred = False
+		self.beampred = False  # predict beams using model
+		self.goldbeams = False  # use gold beams
 
 
 class Parser(object):

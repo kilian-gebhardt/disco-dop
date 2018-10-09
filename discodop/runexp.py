@@ -175,8 +175,7 @@ def startexp(
 	funcclassifier = None
 
 	prm.pruningprm = None
-	
-	trainpruningmodels = not rerun	
+	trainpruningmodels = not rerun and prm.pruning
 
 	if rerun:
 		parser.readgrammars(resultdir, prm.stages, prm.postagging,
@@ -185,23 +184,42 @@ def startexp(
 			from sklearn.externals import joblib
 			funcclassifier = joblib.load('%s/funcclassifier.pickle' % resultdir)
 
-		# TODO: load pruning stuff
-		if prm.stages[0].split:
-			from .pruning import loadmodel
+		# load trained pruning models
+		if prm.pruning and prm.stages[0].split:
 			pruningpath = os.path.join(resultdir, "pruning")
-			try:
-				obtagger = loadmodel(pruningpath, 'ob')
-				cbtagger = loadmodel(pruningpath, 'cb')
-				logging.info(obtagger.tag_dictionary.idx2item)
-				prm.pruningprm = parser.PruningPrm(obtagger, cbtagger)
-			except FileNotFoundError:
-				trainpruningmodels = True
+			if prm.pruning == 'ocbrackets':
+				try:
+					from .pruning import loadmodel
+					obtagger = loadmodel(pruningpath, 'ob')
+					cbtagger = loadmodel(pruningpath, 'cb')
+					prm.pruningprm = parser.PruningPrm(obtagger, cbtagger)
+				except FileNotFoundError:
+					trainpruningmodels = True
 
+			if 'dynamicbeams' in prm.pruningprm:
+				try:
+					from .beamwidthprediction import BeamWidthPredictor
+					beamwidthpredictorpath = os.path.join(pruningpath, 'beamwidthprediction', 'best-model.pt')
+					beamwidthpredictor : BeamWidthPredictor \
+						= BeamWidthPredictor.load_from_file(beamwidthpredictorpath)
+					trainpruningmodels = False
+					if prm.pruningprm is None:
+						prm.pruningprm = parser.PruningPrm(None, None)
+					prm.pruningprm.ocbpred = False
+					prm.pruningprm.pruningdir = pruningpath
+					prm.pruningprm.dynamicbeampredictor = beamwidthpredictor
+					if prm.pruning == 'dynamicbeamsgold':
+						prm.pruningprm.goldbeams = True
+					elif prm.pruning == 'dynamicbeamspredict':
+						prm.pruningprm.beampred = True
+				except FileNotFoundError:
+					trainpruningmodels = True
+
+			if trainpruningmodels:
 				trees, sentsoriginal, _ = loadtraincorpus(
-						prm.corpusfmt, prm.traincorpus, prm.binarization, prm.punct,
-						prm.functions, prm.morphology, prm.removeempty, prm.ensureroot,
-						prm.transformations, prm.relationalrealizational, resultdir)
-
+					prm.corpusfmt, prm.traincorpus, prm.binarization, prm.punct,
+					prm.functions, prm.morphology, prm.removeempty, prm.ensureroot,
+					prm.transformations, prm.relationalrealizational, resultdir)
 	else:
 		logging.info('read training & test corpus')
 		if prm.predictfunctions:
@@ -219,9 +237,8 @@ def startexp(
 					sents, prm.stages, prm.testcorpus.maxwords, resultdir,
 					prm.numproc, lexmodel, top)
 
-		#TODO train pruning stuff
-	if trainpruningmodels:
-		if prm.stages[0].split:
+	if trainpruningmodels and prm.stages[0].split:
+		if prm.pruning == 'ocbrackets':
 			stage = prm.stages[0]
 
 			def preparetrees(_trees, _sents):
@@ -279,107 +296,61 @@ def startexp(
 			with open(pruningdev, mode='w') as _:
 				pass
 
-			obtagger = pruning_training(pruningdir, 'ob', max_epochs=20)
-			cbtagger = pruning_training(pruningdir, 'cb', max_epochs=20)
+			obtagger = pruning_training(pruningdir, 'ob', max_epochs=1)
+			cbtagger = pruning_training(pruningdir, 'cb', max_epochs=1)
 			prm.pruningprm = parser.PruningPrm(obtagger, cbtagger)
 
-			trainbeamwidthprediction = True
+		elif 'dynamicbeams' in prm.pruning:
+			from .beamwidthprediction import SENTS_SUFFIX, GOLD_CELL_SUFFIX, train_model
 
-			if trainbeamwidthprediction:
-				from .pruning import beamwidths
-				from .pcfg import parse
-				from .parser import estimateitems, escape, ptbescape, replaceraretestwords
-				from .beamwidthprediction import SENTS_SUFFIX, GOLD_CELL_SUFFIX, train_model
+			# first collect training data by parsing the training corpus
+			trainsettb = treebank.READERS[prm.corpusfmt](
+				prm.traincorpus.path, encoding=prm.traincorpus.encoding,
+				headrules=prm.binarization.headrules,
+				removeempty=prm.removeempty, morphology=prm.morphology,
+				functions=prm.functions, ensureroot=prm.ensureroot)
 
-				# first collect training data by parsing the training corpus
-				trainsettb = treebank.READERS[prm.corpusfmt](
-					prm.traincorpus.path, encoding=prm.traincorpus.encoding,
-					headrules=prm.binarization.headrules,
-					removeempty=prm.removeempty, morphology=prm.morphology,
-					functions=prm.functions, ensureroot=prm.ensureroot)
+			_train_blocks = OrderedDict()
+			_train_trees = OrderedDict()
+			_train_tagged_sents = OrderedDict()
+			for n, item in trainsettb.itertrees(prm.traincorpus.skip,
+					prm.traincorpus.skip + prm.traincorpus.numsents):
+				if 1 <= len(item.sent) <= prm.traincorpus.maxwords:
+					_train_blocks[n] = item.block
+					_train_trees[n] = item.tree
+					_train_tagged_sents[n] = [(word, tag) for word, (_, tag)
+											in zip(item.sent, sorted(item.tree.pos()))]
 
-				_train_blocks = OrderedDict()
-				_train_trees = OrderedDict()
-				_train_tagged_sents = OrderedDict()
-				for n, item in trainsettb.itertrees(prm.traincorpus.skip, prm.traincorpus.skip + prm.traincorpus.numsents):
-					if 1 <= len(item.sent) <= prm.traincorpus.maxwords:
-						_train_blocks[n] = item.block
-						_train_trees[n] = item.tree
-						_train_tagged_sents[n] = [(word, tag) for word, (_, tag)
-												in zip(item.sent, sorted(item.tree.pos()))]
+			_train_tagged_sents_mangled = _train_tagged_sents
+			_trainset = OrderedDict((n, (
+							_train_tagged_sents_mangled[n],
+							_train_trees[n],
+							_train_tagged_sents[n], block))
+								for n, block in _train_blocks.items())
 
-				_train_tagged_sents_mangled = _train_tagged_sents
-				_trainset = OrderedDict((n, (
-								_train_tagged_sents_mangled[n],
-								_train_trees[n],
-								_train_tagged_sents[n], block))
-									for n, block in _train_blocks.items())
+			pruningdir = os.path.join(resultdir, "pruning")
 
-				from .parser import punctprune, alignsent
+			from .beamwidthprediction import generatebeamdata
 
-				def generatebeamdata(treeset, beampath: str, sentpath: str):
-					with open(beampath, 'w') as beamfile, \
-						open(sentpath, 'w') as sentfile:
-						for _, (tagged_sent, tree, _, _) in treeset.items():
-							sent = origsent_ = [w for w,_ in tagged_sent]
-							tags = [t for _, t in tagged_sent] if usetags else None
-							if 'PUNCT-PRUNE' in (prm.transformations or ()):
-								origsent = sent[:]
-								punctprune(None, sent)
-								if tags:
-									newtags = alignsent(sent, origsent, dict(enumerate(tags)))
-									tags = [newtags[n] for n, _ in enumerate(sent)]
-							if 'PTBbrackets' in (prm.transformations or ()):
-								sent = [ptbescape(token) for token in sent]
-							else:
-								sent = [escape(token) for token in sent]
-							if prm.postagging and prm.postagging.method == 'unknownword':
-								sent = list(replaceraretestwords(sent,
-																 prm.postagging.unknownwordfun,
-																 prm.postagging.lexicon,
-																 prm.postagging.sigs))
-							if tags is not None:
-								tags = list(tags)
-							# logging.info("Parsing: " + str(sent))
+			trainbeamspath = os.path.join(pruningdir, 'train' + GOLD_CELL_SUFFIX)
+			trainsentspath = os.path.join(pruningdir, 'train' + SENTS_SUFFIX)
+			generatebeamdata(_trainset, trainbeamspath, trainsentspath, top, usetags)
 
-							# beam = -log(stage.beam_beta)
-							beam = 0.0
+			testbeamspath = os.path.join(pruningdir, 'test' + GOLD_CELL_SUFFIX)
+			testsentspath = os.path.join(pruningdir, 'test' + SENTS_SUFFIX)
+			generatebeamdata(testset, testbeamspath, testsentspath, top, usetags)
 
-							chart, msg = parse(
-								sent, stage.grammar,
-								tags=tags,
-								start=top,
-								whitelist=None,
-								beam_beta=beam,
-								beam_delta=stage.beam_delta,
-								itemsestimate=estimateitems(
-									sent, stage.prune, stage.mode, stage.dop),
-								postagging=prm.postagging,
-								pruning=None)
-							if not chart:
-								logging.info("Could not parse: " + str(sent))
-
-							goldbeam, goldinchart = beamwidths(chart, tree, sent, prm, beam)
-							if goldinchart: counter += 1
-							beamfile.write(str(goldbeam) + '\n')
-							sentfile.write(' '.join(origsent_) + '\n')
-
-						logging.info("Found gold trees for %s out of %s sentences in parse charts." % (counter, len(treeset.items())))
-				trainbeamspath = os.path.join(pruningdir, 'train' + GOLD_CELL_SUFFIX)
-				trainsentspath = os.path.join(pruningdir, 'train' + SENTS_SUFFIX)
-				generatebeamdata(_trainset, trainbeamspath, trainsentspath)
-
-				testbeamspath = os.path.join(pruningdir, 'test' + GOLD_CELL_SUFFIX)
-				testsentspath = os.path.join(pruningdir, 'test' + SENTS_SUFFIX)
-				generatebeamdata(testset, testbeamspath, testsentspath)
-
-				beamwidthpredictionmodel = train_model(
+			prm.pruningprm.dynamicbeampredictor: BeamWidthPredictor \
+				= train_model(
 					os.path.join(pruningdir, 'train'),
 					os.path.join(pruningdir, 'test'),
 					os.path.join(pruningdir, 'beamwidthprediction'))
 
-				prm.pruningprm = parser.PruningPrm(None, None)
-				prm.pruningprm.pruningdir = pruningdir
+			prm.pruningprm = parser.PruningPrm(None, None)
+			prm.pruningprm.pruningdir = pruningdir
+			if prm.pruningprm == 'dynamicbeamsgold':
+				prm.pruningprm.goldbeams = True
+			elif prm.pruningprm == 'dynamicbeamspredict':
 				prm.pruningprm.beampred = True
 
 	evalparam = evalmod.readparam(prm.evalparam)
@@ -748,7 +719,7 @@ def doparsing(**kwds):
 				elapsedtime=dict.fromkeys(params.testset),
 				evaluator=evalmod.Evaluator(params.evalparam), noparse=0)
 
-	# TODO pruning predictions in batch mode
+	# pruning predictions in batch mode
 	if params.parser.stages[0].split and params.parser.prm.pruningprm:
 		pruningprm = params.parser.prm.pruningprm
 		if pruningprm.ocbpred:
@@ -758,22 +729,25 @@ def doparsing(**kwds):
 			pruningprm.pruningmasks = predictpruningmask(params.testset,
 					pruningprm.obtagger, pruningprm.cbtagger,
 					pruningprm.obthreshold, pruningprm.cbthreshold)
-			logging.info("Predicted pruning masks in %fs" % (time.perf_counter() - c))
-		elif pruningprm.beampred:
-			from .beamwidthprediction import BeamWidthsCorpusReader, sentencetopruningmask, TaggedCorpus
+			logging.info("Predicted pruning masks in %fs"
+					% (time.perf_counter() - c))
+		elif pruningprm.goldbeams:
+			from .beamwidthprediction import BeamWidthsCorpusReader, \
+				sentencetopruningmask, TaggedCorpus
 			from .pruning import PruningMask
 			logging.info("Loading gold dynamic beams")
 			corpus: TaggedCorpus = BeamWidthsCorpusReader.read_beam_width_corpus(
 				train_prefix=os.path.join(pruningprm.pruningdir, 'train'),
 				test_prefix=os.path.join(pruningprm.pruningdir, 'test'))
 			assert len(params.testset.items()) == len(corpus.test)
-			for (n, (_, _, sent, _)), sentence in zip(params.testset.items(), corpus.test):
+			for (n, (_, _, sent, _)), sentence \
+				in zip(params.testset.items(), corpus.test):
 				assert len(sent) == len(sentence)
 				for word_pos_pair, token in zip(sent, sentence):
 					if word_pos_pair[0] != token.text:
 						print(sent)
 						print(sentence)
-						print('"%s"' % word_pos_pair[0], "vs.", '"%s"' % token.text)
+						print('"%s" vs. "%s"' % (word_pos_pair[0], token.text))
 					assert word_pos_pair[0] == token.text
 			pruningprm.pruningmasks: OrderedDict[int, PruningMask] = OrderedDict(
 				(n, sentencetopruningmask(sentence))
@@ -781,6 +755,17 @@ def doparsing(**kwds):
 			logging.info('Gold dynamic beams: %d' % len(pruningprm.pruningmasks))
 			some_key = list(pruningprm.pruningmasks.keys())[0]
 			logging.info(pruningprm.pruningmasks[some_key].dynamicbeams[:10])
+		elif pruningprm.beampred:
+			c = time.perf_counter()
+			logging.info("Predicting of dynamic beams in batch mode")
+			from .beamwidthprediction import predictdynamicbeams
+			from .pruning import PruningMask
+			pruningprm.pruningmasks: OrderedDict[int, PruningMask] \
+				= predictdynamicbeams(
+					params.testset,
+					pruningprm.dynamicbeampredictor)
+			logging.info("Predicted dynamic beams in %.1fs"
+						% (time.perf_counter() - c))
 
 	if params.numproc == 1:
 		initworker(params)

@@ -1,23 +1,29 @@
-import flair
-from flair.data import Sentence, Dictionary, TaggedCorpus
-from flair.data_fetcher import NLPTaskDataFetcher
-from flair.nn import LockedDropout
-from flair.models.sequence_tagger_model import pad_tensors, clear_embeddings
-import torch.nn as nn
-import torch
-from torch import autograd
-import warnings
-from typing import List, Tuple, Union, Dict
-import numpy as np
-from .containers import cellidx
 import datetime
+import logging
 import os
 import random
-import logging
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-from flair.training_utils import Metric, init_output_file, WeightExtractor
+import warnings
 from collections import OrderedDict
+from typing import List, Tuple, Union
+
+import flair
+import numpy as np
+import torch
+import torch.nn as nn
+from flair.data import Sentence, Dictionary, TaggedCorpus
+from flair.models.sequence_tagger_model import clear_embeddings
+from flair.nn import LockedDropout
+from flair.training_utils import Metric, init_output_file, WeightExtractor
+from torch import autograd
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+from . import disambiguation
+from . import treetransforms, treebanktransforms
+from .containers import cellidx, cellstart, cellend
+from .pcfg import DenseCFGChart
 from .pruning import PruningMask
+from .punctuation import applypunct
+
 
 class SentenceWithChartInfo(Sentence):
 	def __init__(self, *args, **kwargs):
@@ -27,13 +33,13 @@ class SentenceWithChartInfo(Sentence):
 
 class BeamWidthPredictor(nn.Module):
 	def __init__(self,
-					hidden_size: int,
-					embeddings: flair.embeddings.TokenEmbeddings,
-					tag_dictionary: Dictionary,
-					tag_type: str,
-					use_rnn: bool = True,
-					rnn_layers: int = 1
-					):
+				hidden_size: int,
+				embeddings: flair.embeddings.TokenEmbeddings,
+				tag_dictionary: Dictionary,
+				tag_type: str,
+				use_rnn: bool = True,
+				rnn_layers: int = 1
+				):
 
 		super(BeamWidthPredictor, self).__init__()
 
@@ -330,15 +336,18 @@ class BeamWidthPredictionTrainer:
 			  save_final_model: bool = True,
 			  ):
 
-		evaluation_method = 'accuracy'
+		# evaluation_method = 'accuracy'
 		# evaluation_method = 'F1'
+		evaluation_method = 'missclassification-costs'
 		# if self.model.tag_type in ['pos', 'upos']: evaluation_method = 'accuracy'
 		log.info('Evaluation method: {}'.format(evaluation_method))
 
 		loss_txt = init_output_file(base_path, 'loss.tsv')
 		with open(loss_txt, 'a') as f:
 			f.write('EPOCH\tTIMESTAMP\tTRAIN_LOSS\t{}\tDEV_LOSS\t{}\tTEST_LOSS\t{}\n'.format(
-				Metric.tsv_header('TRAIN'), Metric.tsv_header('DEV'), Metric.tsv_header('TEST')))
+				MetricWithMissclassificationCosts.tsv_header('TRAIN'),
+				MetricWithMissclassificationCosts.tsv_header('DEV'),
+				MetricWithMissclassificationCosts.tsv_header('TEST')))
 
 		weight_extractor = WeightExtractor(base_path)
 
@@ -422,15 +431,19 @@ class BeamWidthPredictionTrainer:
 
 				log.info("EPOCH {0}: lr {1:.4f} - bad epochs {2}".format(epoch + 1, learning_rate, scheduler.num_bad_epochs))
 				if not train_with_dev:
-					log.info("{0:<4}: f-score {1:.4f} - acc {2:.4f} - tp {3} - fp {4} - fn {5} - tn {6}".format(
-						'DEV', dev_metric.f_score(), dev_metric.accuracy(), dev_metric._tp, dev_metric._fp, dev_metric._fn, dev_metric._tn))
-				log.info("{0:<4}: f-score {1:.4f} - acc {2:.4f} - tp {3} - fp {4} - fn {5} - tn {6}".format(
-					'TEST', test_metric.f_score(), test_metric.accuracy(), test_metric._tp, test_metric._fp, test_metric._fn, test_metric._tn))
+					log.info("{0:<4}: f-score {1:.4f} - acc {2:.4f} - tp {3} - fp {4} - fn {5} - tn {6} - mc {7}".format(
+						'DEV', dev_metric.f_score(), dev_metric.accuracy(), dev_metric._tp, dev_metric._fp, dev_metric._fn, dev_metric._tn, dev_metric._mc))
+				log.info("{0:<4}: f-score {1:.4f} - acc {2:.4f} - tp {3} - fp {4} - fn {5} - tn {6} - mc {7}".format(
+					'TEST', test_metric.f_score(), test_metric.accuracy(), test_metric._tp, test_metric._fp, test_metric._fn, test_metric._tn, test_metric._mc))
 
 				with open(loss_txt, 'a') as f:
-					dev_metric_str = dev_metric.to_tsv() if dev_metric is not None else Metric.to_empty_tsv()
+					dev_metric_str = dev_metric.to_tsv() \
+						if dev_metric is not None \
+						else MetricWithMissclassificationCosts.to_empty_tsv()
 					f.write('{}\t{:%H:%M:%S}\t{}\t{}\t{}\t{}\t{}\t{}\n'.format(
-						epoch, datetime.datetime.now(), '_', Metric.to_empty_tsv(), '_', dev_metric_str, '_', test_metric.to_tsv()))
+						epoch, datetime.datetime.now(), '_',
+						MetricWithMissclassificationCosts.to_empty_tsv(), '_',
+						dev_metric_str, '_', test_metric.to_tsv()))
 
 				# if we use dev data, remember best model based on dev evaluation score
 				if not train_with_dev and dev_score == scheduler.best:
@@ -456,7 +469,7 @@ class BeamWidthPredictionTrainer:
 		batches = [evaluation[x:x + eval_batch_size] for x in
 				   range(0, len(evaluation), eval_batch_size)]
 
-		metric = Metric('')
+		metric = MetricWithMissclassificationCosts('')
 
 		lines: List[str] = []
 
@@ -487,6 +500,10 @@ class BeamWidthPredictionTrainer:
 					else:
 						metric.fp()
 						metric.fn()
+					if DEFAULTBEAMS[gold] > DEFAULTBEAMS[pred]:
+						metric.mc(self.model.assymetric_loss)
+					elif DEFAULTBEAMS[gold] < DEFAULTBEAMS[pred]:
+						metric.mc(1)
 
 			if not embeddings_in_memory:
 				self.clear_embeddings_in_batch(batch)
@@ -504,6 +521,10 @@ class BeamWidthPredictionTrainer:
 			score = metric.f_score()
 			return score, metric
 
+		if evaluation_method == 'missclassification-costs':
+			score = metric.neg_missclassification_costs()
+			return score, metric
+
 	def clear_embeddings_in_batch(self, batch: List[Sentence]):
 		for sentence in batch:
 			for token in sentence.tokens:
@@ -515,25 +536,26 @@ SENTS_SUFFIX = '_sents.txt'
 GOLD_CELL_SUFFIX = '_goldcells.txt'
 MAXBEAM = 5.0
 STEPSIZE = 0.5
-from math import log
+
+import math
 
 def defaultbags(x: Union[str, float]):
 	if x == PRUNE:
 		return PRUNE
-	if x > log(10**MAXBEAM):
+	if x > math.log(10**MAXBEAM):
 		return "INF"
 	if x <= 0:
 		return "E0.0"
 	else:
 		for y in range(0, int(MAXBEAM / STEPSIZE) + 1):
-			if x <= log(10**(y * STEPSIZE)):
+			if x <= math.log(10**(y * STEPSIZE)):
 				return "E%.1f" % (y * STEPSIZE)
 
 
 DEFAULTBEAMS = OrderedDict()
 DEFAULTBEAMS["PRUNE"] = float('-Inf')
 for y in range(0, int(MAXBEAM / STEPSIZE) + 1):
-	DEFAULTBEAMS["E%.1f" % (y * STEPSIZE)] = log(10**(y * STEPSIZE))
+	DEFAULTBEAMS["E%.1f" % (y * STEPSIZE)] = math.log(10**(y * STEPSIZE))
 DEFAULTBEAMS["INF"] = float('Inf')
 
 
@@ -747,11 +769,14 @@ def train_model(train_prefix: str, test_prefix: str, training_path: str):
 	tag_dict = Dictionary(add_unk=False)
 	for item in DEFAULTBEAMS: tag_dict.add_item(item)
 
-	model: BeamWidthPredictor = BeamWidthPredictor(hidden_size=256, embeddings=embedding, tag_dictionary=tag_dict, tag_type=None)
+	model: BeamWidthPredictor = BeamWidthPredictor(hidden_size=256,
+			embeddings=embedding, tag_dictionary=tag_dict, tag_type=None)
 
-	corpus = BeamWidthsCorpusReader.read_beam_width_corpus(train_prefix, test_prefix)
+	corpus = BeamWidthsCorpusReader.read_beam_width_corpus(train_prefix,
+			test_prefix)
 
-	trainer: BeamWidthPredictionTrainer = BeamWidthPredictionTrainer(model, corpus)
+	trainer: BeamWidthPredictionTrainer \
+		= BeamWidthPredictionTrainer(model, corpus)
 
 	trainer.train(training_path, embeddings_in_memory=False, max_epochs=20)
 
@@ -770,3 +795,202 @@ def sentencetopruningmask(sentence: SentenceWithChartInfo):
 			dynamicbeams.append(DEFAULTBEAMS[sentence.chartinfo[idx]])
 			idx += 1
 	return mask
+
+
+class MetricWithMissclassificationCosts(Metric):
+	def __init__(self, name):
+		super(MetricWithMissclassificationCosts, self).__init__(name)
+		self._mc = 0.0
+
+	def to_tsv(self):
+		tsv = super(MetricWithMissclassificationCosts, self).to_tsv()
+		return '{}\t{}'.format(tsv, self._mc)
+
+	def print(self):
+		log.info(self)
+
+	def mc(self, cost=1.0):
+		self._mc += cost
+
+	def missclassification_costs(self):
+		return self._mc
+
+	def neg_missclassification_costs(self):
+		return -self._mc
+
+	@staticmethod
+	def tsv_header(prefix=None):
+		header = Metric.tsv_header(prefix)
+		if prefix:
+			return '{0}\t{1}_MISSCLASSIFICATION_COSTS'.format(header, prefix)
+
+		return '{}\tMISSCLASSIFICATION_COSTS'.format(header)
+
+	@staticmethod
+	def to_empty_tsv():
+		empty = Metric.to_empty_tsv()
+		return '{}\t_'.format(empty)
+
+	def __str__(self):
+		s = super(MetricWithMissclassificationCosts, self).__str__()
+		return '{0} - missclassification costs: {1}'.format(s, self._mc)
+
+
+def predictdynamicbeams(testset, model: BeamWidthPredictor):
+	model.eval()
+	pruningmasks: OrderedDict[int, PruningMask] \
+		= OrderedDict((n, PruningMask()) for (n, _) in testset.items())
+	sentences = OrderedDict((n, SentenceWithChartInfo(' '.join([w for w, _ in sent])))
+							for (n, (_, _, sent, _)) in testset.items())
+	sentences_list = [s for _, s in sentences.items()]
+
+	model.predict(sentences_list)
+
+	for n in pruningmasks:
+		sent = sentences[n]
+		pruningmasks[n].openbracket = [True for _ in sent]
+		pruningmasks[n].closebracket = [True for _ in sent]
+		pruningmasks[n].dynamicbeams = [DEFAULTBEAMS[x] for x in sentences[n].chartinfo]
+
+	return pruningmasks
+
+
+def beamwidths(chart: DenseCFGChart, goldtree, sent, prm):
+	# reproduce preprocessing so that gold items can be counted
+	goldtree = goldtree.copy(True)
+	applypunct(prm.punct, goldtree, sent[:])
+	if prm.transformations:
+		treebanktransforms.transform(goldtree, sent, prm.transformations)
+	treetransforms.binarizetree(goldtree, prm.binarization, prm.relationalrealizational)
+	treetransforms.addfanoutmarkers(goldtree)
+
+	# todo: ask Andreas about markorigin
+
+	goldtree = treetransforms.splitdiscnodes(goldtree.copy(True),
+			prm.stages[0].markorigin)
+
+	from .tree import DrawTree
+	logging.log(5, DrawTree(goldtree, sent))
+
+	for node in goldtree.subtrees():
+		item = chart.itemid(node.label, node.leaves())
+		cell = item // prm.stages[0].grammar.nonterminals
+		logging.log(5, "%s %s %d %d" % (node.label, str(node.leaves()),
+			item, cell))
+	golditems = [chart.itemid(node.label, node.leaves())
+				for node in goldtree.subtrees()]
+
+	goldbeams = {}
+
+	def updated_goldbeam(items, beams):
+		_counter = 0
+		for item in items:
+			cell = item // prm.stages[0].grammar.nonterminals
+			start = cellstart(cell, len(sent), 1)
+			end = cellend(cell, len(sent), 1)
+			# bestitemprob = chart.getbeambucket(cell) - beam
+			bestitem = chart.bestsubtree(start, end, skipsplit=False)
+			bestitemprob = chart._subtreeprob(bestitem)
+			golditemprob = chart._subtreeprob(item)
+			if golditemprob != float("Inf"):
+				_counter += 1
+			if bestitemprob == float("Inf"):
+				goldbeam = golditemprob
+			else:
+				goldbeam = golditemprob - bestitemprob
+			logging.log(5, "%d [%d-%d]: gold: %f goldbeam: %f" % (cell, start, end, golditemprob, goldbeam))
+			try:
+				beams[cell] = max(beams[cell], goldbeam)
+			except KeyError:
+				beams[cell] = goldbeam
+			assert bestitemprob <= golditemprob
+		return _counter
+
+	counter = updated_goldbeam(golditems, goldbeams)
+	# if gold tree not in chart, add items viterbi tree
+	if counter != len(golditems) and chart:
+		k = 1
+
+		disambiguation.getderivations(chart, k, derivstrings=True)
+		stage = prm.stages[0]
+		if stage.objective == 'shortest':
+			stage.grammar.switch('default'
+								 if stage.estimator == 'rfe'
+								 else stage.estimator, True)
+		tags = None
+		parsetrees, msg1 = disambiguation.marginalize('mpd',
+			chart, sent=sent, tags=tags,
+			k=stage.m, sldop_n=stage.sldop_n,
+			mcplambda=stage.mcplambda,
+			mcplabels=stage.mcplabels,
+			ostag=stage.dop == 'ostag',
+			require=set(),
+			block=set())
+
+		from operator import itemgetter
+		from .tree import ParentedTree
+
+		resultstr, prob, fragments = max(parsetrees, key=itemgetter(1))
+		parsetree = ParentedTree(resultstr)
+
+		viterbiitems = [chart.itemid(node.label, node.leaves())
+						 for node in parsetree.subtrees()]
+
+		updated_goldbeam(viterbiitems, goldbeams)
+
+	return goldbeams, counter == len(golditems)
+
+
+def generatebeamdata(prm, treeset, beampath: str, sentpath: str, top, usetags):
+	from .parser import punctprune, alignsent, estimateitems, escape, \
+		ptbescape, replaceraretestwords
+	from .pcfg import parse
+	stage = prm.stages[0]
+	with open(beampath, 'w') as beamfile, \
+		open(sentpath, 'w') as sentfile:
+		counter = 0
+		for _, (tagged_sent, tree, _, _) in treeset.items():
+			sent = origsent_ = [w for w, _ in tagged_sent]
+			tags = [t for _, t in tagged_sent] if usetags else None
+			if 'PUNCT-PRUNE' in (prm.transformations or ()):
+				origsent = sent[:]
+				punctprune(None, sent)
+				if tags:
+					newtags = alignsent(sent, origsent, dict(enumerate(tags)))
+					tags = [newtags[n] for n, _ in enumerate(sent)]
+			if 'PTBbrackets' in (prm.transformations or ()):
+				sent = [ptbescape(token) for token in sent]
+			else:
+				sent = [escape(token) for token in sent]
+			if prm.postagging and prm.postagging.method == 'unknownword':
+				sent = list(replaceraretestwords(sent,
+												 prm.postagging.unknownwordfun,
+												 prm.postagging.lexicon,
+												 prm.postagging.sigs))
+			if tags is not None:
+				tags = list(tags)
+
+			# disabling beam_beta
+			beam_beta = 0.0
+
+			chart, msg = parse(
+				sent, stage.grammar,
+				tags=tags,
+				start=top,
+				whitelist=None,
+				beam_beta=beam_beta,
+				beam_delta=stage.beam_delta,
+				itemsestimate=estimateitems(
+					sent, stage.prune, stage.mode, stage.dop),
+				postagging=prm.postagging,
+				pruning=None)
+			if not chart:
+				logging.info("Could not parse: " + str(sent))
+
+			goldbeam, goldinchart = beamwidths(chart, tree, sent, prm)
+			if goldinchart: counter += 1
+			beamfile.write(str(goldbeam) + '\n')
+			sentfile.write(' '.join(origsent_) + '\n')
+
+		logging.info("Found gold trees for %s out of %s sentences in parse charts." % (
+		counter, len(treeset.items())))

@@ -5,13 +5,7 @@ from flair.data import Sentence
 from flair.models import SequenceTagger
 from collections import OrderedDict
 import os
-from .pcfg import DenseCFGChart
-from .punctuation import punctprune, applypunct
-from . import treetransforms, treebanktransforms
-from .treetransforms import binarizetree
-from .containers import cellstart
-from .containers import cellend
-from . import disambiguation
+
 
 def bracketannotation(tree: Tree, sent):
 	spans = [t2.leaves() for t2 in tree.subtrees() if len(t2.leaves()) > 1]
@@ -98,89 +92,3 @@ def loadmodel(pruningdir, tag_type):
 			"best-model.pt")
 	tagger = SequenceTagger.load_from_file(path)
 	return tagger
-
-
-def beamwidths(chart: DenseCFGChart, goldtree, sent, prm, beam: float):
-	# reproduce preprocessing so that gold items can be counted
-	goldtree = goldtree.copy(True)
-	applypunct(prm.punct, goldtree, sent[:])
-	if prm.transformations:
-		treebanktransforms.transform(goldtree, sent, prm.transformations)
-	binarizetree(goldtree, prm.binarization, prm.relationalrealizational)
-	treetransforms.addfanoutmarkers(goldtree)
-
-	# todo: ask Andreas about markorigin
-
-	goldtree = treetransforms.splitdiscnodes(goldtree.copy(True),
-			prm.stages[0].markorigin)
-
-	from .tree import DrawTree
-	logging.log(5, DrawTree(goldtree, sent))
-
-	for node in goldtree.subtrees():
-		item = chart.itemid(node.label, node.leaves())
-		cell = item // prm.stages[0].grammar.nonterminals
-		logging.log(5, "%s %s %d %d" % (node.label, str(node.leaves()),
-			item, cell))
-	golditems = [chart.itemid(node.label, node.leaves())
-				for node in goldtree.subtrees()]
-
-	goldbeams = {}
-
-	def updated_goldbeam(items, beams):
-		_counter = 0
-		for item in items:
-			cell = item // prm.stages[0].grammar.nonterminals
-			start = cellstart(cell, len(sent), 1)
-			end = cellend(cell, len(sent), 1)
-			# bestitemprob = chart.getbeambucket(cell) - beam
-			bestitem = chart.bestsubtree(start, end, skipsplit=False)
-			bestitemprob = chart._subtreeprob(bestitem)
-			golditemprob = chart._subtreeprob(item)
-			if golditemprob != float("Inf"):
-				_counter += 1
-			if bestitemprob == float("Inf"):
-				goldbeam = golditemprob
-			else:
-				goldbeam = golditemprob - bestitemprob
-			logging.log(5, "%d [%d-%d]: gold: %f beam: %f goldbeam: %f" % (cell, start, end, golditemprob, beam, goldbeam))
-			try:
-				beams[cell] = max(beams[cell], goldbeam)
-			except KeyError:
-				beams[cell] = goldbeam
-			assert bestitemprob <= golditemprob
-		return _counter
-
-	counter = updated_goldbeam(golditems, goldbeams)
-	# if gold tree not in chart, add items viterbi tree
-	if counter != len(golditems) and chart:
-		k = 1
-
-		disambiguation.getderivations(chart, k, derivstrings=True)
-		stage = prm.stages[0]
-		if stage.objective == 'shortest':
-			stage.grammar.switch('default'
-								 if stage.estimator == 'rfe'
-								 else stage.estimator, True)
-		tags = None
-		parsetrees, msg1 = disambiguation.marginalize('mpd',
-			chart, sent=sent, tags=tags,
-			k=stage.m, sldop_n=stage.sldop_n,
-			mcplambda=stage.mcplambda,
-			mcplabels=stage.mcplabels,
-			ostag=stage.dop == 'ostag',
-			require=set(),
-			block=set())
-
-		from operator import itemgetter
-		from .tree import ParentedTree
-
-		resultstr, prob, fragments = max(parsetrees, key=itemgetter(1))
-		parsetree = ParentedTree(resultstr)
-
-		viterbiitems = [chart.itemid(node.label, node.leaves())
-						 for node in parsetree.subtrees()]
-
-		updated_goldbeam(viterbiitems, goldbeams)
-
-	return goldbeams, counter == len(golditems)
