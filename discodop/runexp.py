@@ -196,7 +196,7 @@ def startexp(
 				except FileNotFoundError:
 					trainpruningmodels = True
 
-			if 'dynamicbeams' in prm.pruningprm:
+			if 'dynamicbeams' in prm.pruning:
 				try:
 					from .beamwidthprediction import BeamWidthPredictor
 					beamwidthpredictorpath = os.path.join(pruningpath, 'beamwidthprediction', 'best-model.pt')
@@ -330,15 +330,19 @@ def startexp(
 
 			pruningdir = os.path.join(resultdir, "pruning")
 
+			for d in [pruningdir]:
+				if not os.path.exists(d):
+					os.mkdir(d)
+
 			from .beamwidthprediction import generatebeamdata
 
 			trainbeamspath = os.path.join(pruningdir, 'train' + GOLD_CELL_SUFFIX)
 			trainsentspath = os.path.join(pruningdir, 'train' + SENTS_SUFFIX)
-			generatebeamdata(_trainset, trainbeamspath, trainsentspath, top, usetags)
+			generatebeamdata(prm, _trainset, trainbeamspath, trainsentspath, top, usetags)
 
 			testbeamspath = os.path.join(pruningdir, 'test' + GOLD_CELL_SUFFIX)
 			testsentspath = os.path.join(pruningdir, 'test' + SENTS_SUFFIX)
-			generatebeamdata(testset, testbeamspath, testsentspath, top, usetags)
+			generatebeamdata(prm, testset, testbeamspath, testsentspath, top, usetags)
 
 			prm.pruningprm.dynamicbeampredictor: BeamWidthPredictor \
 				= train_model(

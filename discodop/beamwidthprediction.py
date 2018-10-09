@@ -248,6 +248,8 @@ class BeamWidthPredictor(nn.Module):
 				)
 
 			scaling = torch.tensor(scaling)
+			if torch.cuda.is_available():
+				scaling = torch.tensor(scaling).cuda()
 			score += nn.functional.cross_entropy(feats, tag_tensor, reduction='none').dot(scaling) / length
 
 		return score
