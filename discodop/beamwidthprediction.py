@@ -556,7 +556,10 @@ def defaultbags(x: Union[str, float]):
 
 DEFAULTBEAMS = OrderedDict()
 DEFAULTBEAMS["PRUNE"] = float('-Inf')
-for y in range(0, int(MAXBEAM / STEPSIZE) + 1):
+# NB: beam_beta of 0.0 disables beam instead of just keeping the best item
+# TODO: this is unfavourable!
+DEFAULTBEAMS["E0.0"] = math.log(10**0.00001)
+for y in range(1, int(MAXBEAM / STEPSIZE) + 1):
 	DEFAULTBEAMS["E%.1f" % (y * STEPSIZE)] = math.log(10**(y * STEPSIZE))
 DEFAULTBEAMS["INF"] = float('Inf')
 
@@ -947,9 +950,19 @@ def generatebeamdata(prm, treeset, beampath: str, sentpath: str, top, usetags):
 	from .parser import punctprune, alignsent, estimateitems, escape, \
 		ptbescape, replaceraretestwords
 	from .pcfg import parse
+
+	# skip expensive training data generation if files already exist
+	# and have `len(treeset)` many lines
+	if os.path.isfile(sentpath) and os.path.isfile(sentpath):
+		with open(beampath, 'r') as beamfile, open(sentpath, 'r') as sentfile:
+			beams = sum(1 for _ in beamfile)
+			sents = sum(1 for _ in sentfile)
+			if beams == sents and sents == len(treeset):
+				return
+
 	stage = prm.stages[0]
-	with open(beampath, 'w') as beamfile, \
-		open(sentpath, 'w') as sentfile:
+
+	with open(beampath, 'w') as beamfile, open(sentpath, 'w') as sentfile:
 		counter = 0
 		for _, (tagged_sent, tree, _, _) in treeset.items():
 			sent = origsent_ = [w for w, _ in tagged_sent]
@@ -973,7 +986,9 @@ def generatebeamdata(prm, treeset, beampath: str, sentpath: str, top, usetags):
 				tags = list(tags)
 
 			# disabling beam_beta
-			beam_beta = 0.0
+			# beam_beta = 0.0
+			# choosing small beam
+			beam_beta = -math.log(1.0e-12)
 
 			chart, msg = parse(
 				sent, stage.grammar,
