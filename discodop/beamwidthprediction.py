@@ -962,7 +962,7 @@ def generatebeamdata(prm, treeset, beampath: str, sentpath: str, top, usetags):
 			sents = sum(1 for _ in sentfile)
 			if beams == sents and sents == len(treeset):
 				return
-			elif beams == sents and beams < len(treeset):ü
+			elif beams == sents and beams < len(treeset):
 				mode = 'a'
 				skip = beams
 
