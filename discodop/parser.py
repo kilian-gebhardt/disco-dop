@@ -84,7 +84,9 @@ DEFAULTS = dict(
 		evalparam='proper.prm',  # EVALB-style parameter file
 		verbosity=2,
 		numproc=1,  # increase to use multiple CPUs; None: use all CPUs.
-		pruning=None)  # choices: None, 'ocbrackets', 'dynamicbeamsgold', 'dynamicbeamspredict'
+		pruning=None,  # choices: None, 'ocbrackets', 'dynamicbeamsgold', 'dynamicbeamspredict'
+		abortafterpruninggeneration=False,
+		abortafterpruningtraining=False)
 
 DEFAULTSTAGE = dict(
 		name='stage1',  # identifier, used for filenames

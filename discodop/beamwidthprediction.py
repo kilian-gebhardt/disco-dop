@@ -951,20 +951,30 @@ def generatebeamdata(prm, treeset, beampath: str, sentpath: str, top, usetags):
 		ptbescape, replaceraretestwords
 	from .pcfg import parse
 
+	mode = 'w'
+	skip = 0
 	# skip expensive training data generation if files already exist
 	# and have `len(treeset)` many lines
+	# append to file, if *consistent* partial training data already exists
 	if os.path.isfile(sentpath) and os.path.isfile(sentpath):
 		with open(beampath, 'r') as beamfile, open(sentpath, 'r') as sentfile:
 			beams = sum(1 for _ in beamfile)
 			sents = sum(1 for _ in sentfile)
 			if beams == sents and sents == len(treeset):
 				return
+			elif beams == sents and beams < len(treeset):ü
+				mode = 'a'
+				skip = beams
 
 	stage = prm.stages[0]
 
-	with open(beampath, 'w') as beamfile, open(sentpath, 'w') as sentfile:
+	with open(beampath, mode) as beamfile, open(sentpath, mode) as sentfile:
+		parsed = 0
 		counter = 0
 		for _, (tagged_sent, tree, _, _) in treeset.items():
+			counter += 1
+			if counter <= skip:
+				continue
 			sent = origsent_ = [w for w, _ in tagged_sent]
 			tags = [t for _, t in tagged_sent] if usetags else None
 			if 'PUNCT-PRUNE' in (prm.transformations or ()):
@@ -1005,9 +1015,12 @@ def generatebeamdata(prm, treeset, beampath: str, sentpath: str, top, usetags):
 				logging.info("Could not parse: " + str(sent))
 
 			goldbeam, goldinchart = beamwidths(chart, tree, sent, prm)
-			if goldinchart: counter += 1
+			if goldinchart: parsed += 1
 			beamfile.write(str(goldbeam) + '\n')
 			sentfile.write(' '.join(origsent_) + '\n')
+			if counter % 10 == 0:
+				beamfile.flush()
+				sentfile.flush()
 
 		logging.info("Found gold trees for %s out of %s sentences in parse charts." % (
-		counter, len(treeset.items())))
+		parsed, len(treeset.items())))
