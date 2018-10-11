@@ -200,7 +200,7 @@ def startexp(
 				try:
 					from .beamwidthprediction import BeamWidthPredictor
 					beamwidthpredictorpath = os.path.join(pruningpath, 'beamwidthprediction', 'best-model.pt')
-					beamwidthpredictor : BeamWidthPredictor \
+					beamwidthpredictor, optimizerstate \
 						= BeamWidthPredictor.load_from_file(beamwidthpredictorpath)
 					trainpruningmodels = False
 					if prm.pruningprm is None:
@@ -208,10 +208,13 @@ def startexp(
 					prm.pruningprm.ocbpred = False
 					prm.pruningprm.pruningdir = pruningpath
 					prm.pruningprm.dynamicbeampredictor = beamwidthpredictor
+					prm.pruningprm.optimizerstate = optimizerstate
 					if prm.pruning == 'dynamicbeamsgold':
 						prm.pruningprm.goldbeams = True
 					elif prm.pruning == 'dynamicbeamspredict':
 						prm.pruningprm.beampred = True
+					if prm.resumepruningtraining:
+						trainpruningmodels = True
 				except FileNotFoundError:
 					trainpruningmodels = True
 
@@ -334,6 +337,9 @@ def startexp(
 				if not os.path.exists(d):
 					os.mkdir(d)
 
+			if prm.pruningprm is None:
+				prm.pruningprm = parser.PruningPrm(None, None)
+
 			from .beamwidthprediction import generatebeamdata
 
 			trainbeamspath = os.path.join(pruningdir, 'train' + GOLD_CELL_SUFFIX)
@@ -344,13 +350,22 @@ def startexp(
 			testsentspath = os.path.join(pruningdir, 'test' + SENTS_SUFFIX)
 			generatebeamdata(prm, testset, testbeamspath, testsentspath, top, usetags)
 
+			if prm.abortafterpruninggeneration:
+				logging.info("Stopped execution after generation of pruning training data")
+				return
+
 			prm.pruningprm.dynamicbeampredictor: BeamWidthPredictor \
-				= train_model(
+					= train_model(
 					os.path.join(pruningdir, 'train'),
 					os.path.join(pruningdir, 'test'),
-					os.path.join(pruningdir, 'beamwidthprediction'))
+					os.path.join(pruningdir, 'beamwidthprediction'),
+					model=prm.pruningprm.dynamicbeampredictor,
+					state=prm.pruningprm.optimizerstate)
 
-			prm.pruningprm = parser.PruningPrm(None, None)
+			if prm.abortafterpruningtraining:
+				logging.info("Stopped execution after training pruning model")
+				return
+
 			prm.pruningprm.pruningdir = pruningdir
 			if prm.pruningprm == 'dynamicbeamsgold':
 				prm.pruningprm.goldbeams = True

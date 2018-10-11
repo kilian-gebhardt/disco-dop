@@ -86,7 +86,8 @@ DEFAULTS = dict(
 		numproc=1,  # increase to use multiple CPUs; None: use all CPUs.
 		pruning=None,  # choices: None, 'ocbrackets', 'dynamicbeamsgold', 'dynamicbeamspredict'
 		abortafterpruninggeneration=False,
-		abortafterpruningtraining=False)
+		abortafterpruningtraining=False,
+		resumepruningtraining=False)
 
 DEFAULTSTAGE = dict(
 		name='stage1',  # identifier, used for filenames
@@ -158,6 +159,7 @@ class PruningPrm:
 		self.obthreshold = 0.9
 		self.cbthreshold = 0.9
 		self.dynamicbeampredictor = None
+		self.optimizerstate = None
 		self.pruningdir = None
 		self.beampred = False  # predict beams using model
 		self.goldbeams = False  # use gold beams

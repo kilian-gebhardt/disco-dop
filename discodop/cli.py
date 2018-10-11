@@ -176,11 +176,26 @@ overwritten."""
 	rerun = '--rerun' in args
 	if rerun:
 		args.remove('--rerun')
+	abortafterpruninggeneration = '--stop-after-pruning-data-generation' in args
+	if abortafterpruninggeneration:
+		args.remove('--stop-after-pruning-data-generation')
+	abortafterpruningtraining = '--stop-after-pruning-training' in args
+	if abortafterpruningtraining:
+		args.remove('--stop-after-pruning-training')
+	resumepruningtraining = '--resume-pruning-training' in args
+	if resumepruningtraining:
+		args.remove('--resume-pruning-training')
 	if len(args) != 1:
 		print('error: incorrect arguments %r' % args, file=stderr)
 		print(runexp.__doc__)
 		sysexit(2)
 	params = readparam(args[0])
+	if abortafterpruninggeneration:
+		params.abortafterpruninggeneration = True
+	if abortafterpruningtraining:
+		params.abortafterpruningtraining = True
+	if resumepruningtraining:
+		params.resumepruningtraining = True
 	resultdir = args[0].rsplit('.', 1)[0]
 	top = startexp(params, resultdir=resultdir, rerun=rerun)
 	if not rerun:  # copy parameter file to result dir

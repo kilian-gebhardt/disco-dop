@@ -97,7 +97,7 @@ class BeamWidthPredictor(nn.Module):
 		if torch.cuda.is_available():
 			self.cuda()
 
-	def save(self, model_file: str):
+	def save(self, model_file: str, optimizer=None, scheduler: ReduceLROnPlateau=None, epoch: int=None):
 		model_state = {
 			'state_dict': self.state_dict(),
 			'embeddings': self.embeddings,
@@ -107,6 +107,12 @@ class BeamWidthPredictor(nn.Module):
 			'use_rnn': self.use_rnn,
 			'rnn_layers': self.rnn_layers,
 		}
+		if optimizer:
+			model_state['optimizer'] = optimizer.state_dict()
+		if epoch:
+			model_state['epoch'] = epoch
+		if scheduler:
+			model_state['scheduler'] = scheduler.state_dict()
 		torch.save(model_state, model_file, pickle_protocol=4)
 
 	@classmethod
@@ -129,7 +135,7 @@ class BeamWidthPredictor(nn.Module):
 		model.eval()
 		if torch.cuda.is_available():
 			model = model.cuda()
-		return model
+		return model, state
 
 	def forward(self, sentences: List[SentenceWithChartInfo]) \
 		-> Tuple[List, List, List]:
@@ -336,6 +342,8 @@ class BeamWidthPredictionTrainer:
 			  embeddings_in_memory: bool = True,
 			  checkpoint: bool = False,
 			  save_final_model: bool = True,
+			  save_optimizer: bool = True,
+			  resume = None
 			  ):
 
 		# evaluation_method = 'accuracy'
@@ -359,6 +367,13 @@ class BeamWidthPredictionTrainer:
 		scheduler: ReduceLROnPlateau = ReduceLROnPlateau(optimizer,
 				factor=anneal_factor, patience=patience, mode=anneal_mode)
 
+		first_epoch = 0
+
+		if resume:
+			optimizer.load_state_dict(resume['optimizer'])
+			scheduler.load_state_dict(resume['scheduler'])
+			first_epoch = resume['epoch']
+
 		train_data = self.corpus.train
 
 		# if training also uses dev data, include in training set
@@ -368,7 +383,7 @@ class BeamWidthPredictionTrainer:
 		# At any point you can hit Ctrl + C to break out of training early.
 		try:
 
-			for epoch in range(max_epochs):
+			for epoch in range(first_epoch, max_epochs):
 				log.info('-' * 100)
 
 				if not self.test_mode: random.shuffle(train_data)
@@ -416,7 +431,10 @@ class BeamWidthPredictionTrainer:
 
 				# if checkpointing is enable, save model at each epoch
 				if checkpoint:
-					self.model.save(base_path + "/checkpoint.pt")
+					self.model.save(base_path + "/checkpoint.pt",
+							optimizer=optimizer if save_optimizer else None,
+							scheduler=scheduler if save_optimizer else None,
+							epoch=epoch)
 
 				log.info('-' * 100)
 
@@ -449,18 +467,27 @@ class BeamWidthPredictionTrainer:
 
 				# if we use dev data, remember best model based on dev evaluation score
 				if not train_with_dev and dev_score == scheduler.best:
-					self.model.save(base_path + "/best-model.pt")
+					self.model.save(base_path + "/best-model.pt",
+						optimizer=optimizer if save_optimizer else None,
+						scheduler=scheduler if save_optimizer else None,
+						epoch=epoch+1)
 
 			# if we do not use dev data for model selection, save final model
 			if save_final_model:
 				if train_with_dev:
-					self.model.save(base_path + "/final-model.pt")
+					self.model.save(base_path + "/final-model.pt",
+						optimizer=optimizer if save_optimizer else None,
+						scheduler=scheduler if save_optimizer else None,
+						epoch=epoch+1)
 
 		except KeyboardInterrupt:
 			log.info('-' * 100)
 			log.info('Exiting from training early.')
 			log.info('Saving model ...')
-			self.model.save(base_path + "/final-model.pt")
+			self.model.save(base_path + "/final-model.pt",
+					optimizer=optimizer if save_optimizer else None,
+					scheduler=scheduler if save_optimizer else None,
+					epoch=epoch+1)
 			log.info('Done.')
 
 	def evaluate(self, evaluation: List[SentenceWithChartInfo], out_path=None, evaluation_method: str = 'F1',
@@ -765,7 +792,10 @@ class BeamWidthsCorpusReader:
 		return sample
 
 
-def train_model(train_prefix: str, test_prefix: str, training_path: str):
+def train_model(train_prefix: str, test_prefix: str, training_path: str,
+				model: BeamWidthPredictor=None,
+				state=None,
+				max_epochs=20):
 	from flair.embeddings import CharLMEmbeddings, StackedEmbeddings
 	fm = CharLMEmbeddings("german-forward")
 	bm = CharLMEmbeddings("german-backward")
@@ -774,7 +804,8 @@ def train_model(train_prefix: str, test_prefix: str, training_path: str):
 	tag_dict = Dictionary(add_unk=False)
 	for item in DEFAULTBEAMS: tag_dict.add_item(item)
 
-	model: BeamWidthPredictor = BeamWidthPredictor(hidden_size=256,
+	if model is None:
+		model: BeamWidthPredictor = BeamWidthPredictor(hidden_size=256,
 			embeddings=embedding, tag_dictionary=tag_dict, tag_type=None)
 
 	corpus = BeamWidthsCorpusReader.read_beam_width_corpus(train_prefix,
@@ -783,7 +814,7 @@ def train_model(train_prefix: str, test_prefix: str, training_path: str):
 	trainer: BeamWidthPredictionTrainer \
 		= BeamWidthPredictionTrainer(model, corpus)
 
-	trainer.train(training_path, embeddings_in_memory=False, max_epochs=20)
+	trainer.train(training_path, embeddings_in_memory=False, max_epochs=20, resume=state)
 
 	return model
 
@@ -955,7 +986,7 @@ def generatebeamdata(prm, treeset, beampath: str, sentpath: str, top, usetags):
 	skip = 0
 	# skip expensive training data generation if files already exist
 	# and have `len(treeset)` many lines
-	# append to file, if *consistent* partial training data already exists
+	# append to existing file, if *consistent* partial training data already exists
 	if os.path.isfile(sentpath) and os.path.isfile(sentpath):
 		with open(beampath, 'r') as beamfile, open(sentpath, 'r') as sentfile:
 			beams = sum(1 for _ in beamfile)
