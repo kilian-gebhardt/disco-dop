@@ -213,7 +213,9 @@ def startexp(
 						prm.pruningprm.goldbeams = True
 					elif prm.pruning == 'dynamicbeamspredict':
 						prm.pruningprm.beampred = True
+					logging.info("Loaded beam width prediction model from file")
 					if prm.resumepruningtraining:
+						logging.info("Resuming training")
 						trainpruningmodels = True
 				except FileNotFoundError:
 					trainpruningmodels = True

@@ -2,6 +2,7 @@ import datetime
 import logging
 import os
 import random
+import time
 import warnings
 from collections import OrderedDict
 from typing import List, Tuple, Union
@@ -385,6 +386,7 @@ class BeamWidthPredictionTrainer:
 
 			for epoch in range(first_epoch, max_epochs):
 				log.info('-' * 100)
+				start_clock = time.time()
 
 				if not self.test_mode: random.shuffle(train_data)
 
@@ -419,8 +421,9 @@ class BeamWidthPredictionTrainer:
 						self.clear_embeddings_in_batch(batch)
 
 					if batch_no % modulo == 0:
-						log.info("epoch {0} - iter {1}/{2} - loss {3:.8f}".format(
-							epoch + 1, batch_no, len(batches), current_loss / seen_sentences))
+						log.info("epoch {0} - iter {1}/{2} - loss {3:.8f} - time {4}".format(
+							epoch + 1, batch_no, len(batches), current_loss / seen_sentences,
+							str(datetime.timedelta(seconds=int(time.time() - start_clock)))))
 						iteration = epoch * len(batches) + batch_no
 						weight_extractor.extract_weights(self.model.state_dict(), iteration)
 
@@ -449,7 +452,10 @@ class BeamWidthPredictionTrainer:
 				# anneal against train loss if training with dev, otherwise anneal against dev score
 				scheduler.step(current_loss) if train_with_dev else scheduler.step(dev_score)
 
-				log.info("EPOCH {0}: lr {1:.4f} - bad epochs {2}".format(epoch + 1, learning_rate, scheduler.num_bad_epochs))
+				log.info("EPOCH {0}: lr {1:.4f} - bad epochs {2} - time {3} ".format(
+					epoch + 1, learning_rate,
+					scheduler.num_bad_epochs,
+					str(datetime.timedelta(seconds=int(time.time() - start_clock)))))
 				if not train_with_dev:
 					log.info("{0:<4}: f-score {1:.4f} - acc {2:.4f} - tp {3} - fp {4} - fn {5} - tn {6} - mc {7}".format(
 						'DEV', dev_metric.f_score(), dev_metric.accuracy(), dev_metric._tp, dev_metric._fp, dev_metric._fn, dev_metric._tn, dev_metric._mc))
@@ -814,7 +820,8 @@ def train_model(train_prefix: str, test_prefix: str, training_path: str,
 	trainer: BeamWidthPredictionTrainer \
 		= BeamWidthPredictionTrainer(model, corpus)
 
-	trainer.train(training_path, embeddings_in_memory=False, max_epochs=20, resume=state)
+	trainer.train(training_path, embeddings_in_memory=False, max_epochs=20,
+				  resume=state, checkpoint=True)
 
 	return model
 
