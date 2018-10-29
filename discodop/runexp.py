@@ -199,7 +199,8 @@ def startexp(
 			if 'dynamicbeams' in prm.pruning:
 				try:
 					from .beamwidthprediction import BeamWidthPredictor
-					beamwidthpredictorpath = os.path.join(pruningpath, 'beamwidthprediction', 'best-model.pt')
+					modeltype = 'checkpoint.pt' if prm.resumepruningtraining else 'best-model.pt'
+					beamwidthpredictorpath = os.path.join(pruningpath, 'beamwidthprediction', modeltype)
 					beamwidthpredictor, optimizerstate \
 						= BeamWidthPredictor.load_from_file(beamwidthpredictorpath)
 					trainpruningmodels = False
