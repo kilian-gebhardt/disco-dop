@@ -57,12 +57,12 @@ cdef class CFGChart(Chart):
 @cython.final
 cdef class DenseCFGChart(CFGChart):
 	cdef void addedge(self, uint64_t item, Idx mid, ProbRule *rule)
-	cdef bint updateprob(self, uint64_t item, Prob prob, Prob beam)
+	cdef bint updateprob(self, uint64_t item, Prob prob, Prob beam, Prob est)
 	cdef Label _label(self, uint64_t item)
 	cpdef Prob _subtreeprob(self, uint64_t item)
 	cpdef Prob getbeambucket(self, size_t cell)
 	cdef bint _hasitem(self, uint64_t item)
-	cdef int prunecell(self, uint64_t cell)
+	cdef int prunecell(self, uint64_t cell, vector[Prob] estimates)
 
 
 @cython.final

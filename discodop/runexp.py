@@ -244,26 +244,27 @@ def startexp(
 					prm.numproc, lexmodel, top)
 
 	if trainpruningmodels and prm.stages[0].split:
+		def preparepcfgtrees(_trees, _sents):
+			_trees = dobinarization(_trees, _sents, prm.binarization,
+									prm.relationalrealizational)
+
+			_trees = [treetransforms.binarize(
+				treetransforms.splitdiscnodes(
+					tree.copy(True),
+					stage.markorigin),
+				childchar=':', dot=True, ids=grammar.UniqueIDs())
+				for tree in _trees]
+
+			if stage.collapse:
+				_trees, _ = treebanktransforms.collapselabels(
+					[tree.copy(True) for tree in _trees],
+					tbmapping=treebanktransforms.MAPPINGS[
+						stage.collapse[0]][stage.collapse[1]])
+			return _trees
+
 		if prm.pruning == 'ocbrackets':
 			stage = prm.stages[0]
 
-			def preparetrees(_trees, _sents):
-				_trees = dobinarization(_trees, _sents, prm.binarization,
-						prm.relationalrealizational)
-
-				_trees = [treetransforms.binarize(
-					treetransforms.splitdiscnodes(
-						tree.copy(True),
-						stage.markorigin),
-					childchar=':', dot=True, ids=grammar.UniqueIDs())
-					for tree in _trees]
-
-				if stage.collapse:
-					_trees, _ = treebanktransforms.collapselabels(
-						[tree.copy(True) for tree in _trees],
-						tbmapping=treebanktransforms.MAPPINGS[
-							stage.collapse[0]][stage.collapse[1]])
-				return _trees
 
 			pruningdir = os.path.join(resultdir, "pruning")
 			for d in [pruningdir]:
@@ -278,19 +279,19 @@ def startexp(
 			from .pruning import bracketannotation, annotation2file, \
 				pruning_training
 
-			traintrees = preparetrees([t.copy(True) for t in trees], sentsoriginal)
+			traintrees = preparepcfgtrees([t.copy(True) for t in trees], sentsoriginal)
 			if False:
 				with io.open(pruningtraintrees, 'w', encoding='utf8') as out:
 					out.writelines(treebank.writetree(
 						traintree, sent, n, prm.corpusfmt,
 						morphology=prm.morphology) for n, (traintree, sent) in enumerate(zip(traintrees, sentsoriginal)))
 			with open(pruningtrain, mode='w') as trainfile:
-				for t, s in zip(preparetrees(traintrees, sentsoriginal), sentsoriginal):
+				for t, s in zip(preparepcfgtrees(traintrees, sentsoriginal), sentsoriginal):
 					annotation2file(bracketannotation(t, s), trainfile)
 			testtrees = [t.copy(True) for _, (_, t, _, _) in testset.items()]
 			testsents = [[w for w, _ in sent] for _,(_, _, sent,_) in testset.items()]
 			logging.info(str(testsents[0]))
-			testtrees = preparetrees(testtrees, testsents)
+			testtrees = preparepcfgtrees(testtrees, testsents)
 			if False:
 				with io.open(pruningtesttrees, 'w', encoding='utf8') as out:
 					out.writelines(treebank.writetree(
@@ -374,6 +375,28 @@ def startexp(
 				prm.pruningprm.goldbeams = True
 			elif prm.pruningprm == 'dynamicbeamspredict':
 				prm.pruningprm.beampred = True
+
+		elif 'posboundaryprio' in prm.pruning:
+			from .estimates import posboundaryestimates
+			stage = prm.stages[0]
+
+			pcfgtrees = preparepcfgtrees([t.copy(True) for t in trees], sentsoriginal)
+			# print(type(pcfgtrees))
+			# print(pcfgtrees)
+
+			posconversion, leftboundary, rightboundary \
+				= posboundaryestimates(pcfgtrees, stage.grammar)
+
+			if prm.pruningprm is None:
+				prm.pruningprm = parser.PruningPrm(None, None)
+			prm.pruningprm.posboundaryprio = True
+			prm.pruningprm.posconversion = posconversion
+			prm.pruningprm.leftboundary = leftboundary
+			prm.pruningprm.rightboundary = rightboundary
+
+			print(posconversion)
+			print(leftboundary)
+			print(rightboundary)
 
 	evalparam = evalmod.readparam(prm.evalparam)
 	evalparam['DEBUG'] = -1
@@ -788,6 +811,19 @@ def doparsing(**kwds):
 					pruningprm.dynamicbeampredictor)
 			logging.info("Predicted dynamic beams in %.1fs"
 						% (time.perf_counter() - c))
+		elif pruningprm.posboundaryprio:
+			from .pruning import PruningMask
+
+			def dummymask(sentlen):
+				m = PruningMask()
+				m.openbracket = [True for _ in range(sentlen)]
+				m.closebracket = m.openbracket
+				m.pruningprm = pruningprm
+				return m
+
+			pruningprm.pruningmasks: OrderedDict[int, PruningMask] = OrderedDict(
+				(n, dummymask(len(sent)))
+				for (n, (_, _, sent, _)) in params.testset.items())
 
 	if params.numproc == 1:
 		initworker(params)

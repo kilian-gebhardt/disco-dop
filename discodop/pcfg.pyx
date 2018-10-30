@@ -94,7 +94,7 @@ cdef class DenseCFGChart(CFGChart):
 		edge.pos.lvec = mid
 		self.parseforest[item].push_back(edge)
 
-	cdef bint updateprob(self, uint64_t item, Prob prob, Prob beam):
+	cdef bint updateprob(self, uint64_t item, Prob prob, Prob beam, Prob est):
 		"""Update probability for item if better than current one.
 
 		Add item if not seen before; return False if pruned."""
@@ -103,9 +103,9 @@ cdef class DenseCFGChart(CFGChart):
 		if beam:
 			itemx = item - item % self.grammar.nonterminals
 			beamitem = itemx // self.grammar.nonterminals
-			if prob > self.beambuckets[beamitem]:  # prob falls outside of beam
+			if prob + est > self.beambuckets[beamitem]:  # prob falls outside of beam
 				return False
-			elif prob + beam < self.beambuckets[beamitem]:  # shrink beam
+			elif prob + est + beam < self.beambuckets[beamitem]:  # shrink beam
 				self.beambuckets[beamitem] = prob + beam
 				self.probs[item] = prob
 			elif prob < self.probs[item]:  # prob falls within beam
@@ -117,16 +117,21 @@ cdef class DenseCFGChart(CFGChart):
 			self.items.push_back(item)
 		return True
 
-	cdef int prunecell(self, uint64_t cell):
+	cdef int prunecell(self, uint64_t cell, vector[Prob] estimates):
 		"""Set 0 probability to each item of a cell that falls outside the beam. 
 		
 		Return number of pruned items."""
 		cdef int pruning_counter = 0
 		cdef uint64_t item
+		cdef uint64_t nont
+		cdef est = 0.0
 		beamitem = cell // self.grammar.nonterminals
-		for item in range(cell + 1, cell + self.grammar.nonterminals):
+		for nont in range(1, self.grammar.nonterminals):
+			item = cell + nont
+			if estimates.size() > 0:
+				est = estimates[nont - 1]
 			if (isfinite(self.probs[item])
-					and self.probs[item] > self.beambuckets[beamitem]):
+					and self.probs[item] + est > self.beambuckets[beamitem]):
 				self.probs[item] = INFINITY
 				self.parseforest[item].clear()
 				pruning_counter += 1
@@ -474,6 +479,13 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		bint usemask = grammar.mask.size() != 0
 		vector[bint] openbracket, closebracket
 		vector[Prob] dynamicbeams
+		double est = 0.0
+		bint posboundaryprio = False
+		vector[Prob] estimates = []
+		double [:,:] leftboundary, rightboundary
+		vector[short] posconversion
+		double unismooth = 1.0e-5
+
 	# Create matrices to track minima and maxima for binary splits.
 	n = (lensent + 1) * nts + 1
 	midfilter.minleft.resize(n, -1)
@@ -489,6 +501,12 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		openbracket[0] = True
 		closebracket[lensent - 1] = True
 		dynamicbeams = pruning.dynamicbeams
+		posboundaryprio = pruning.pruningprm.posboundaryprio
+		posconversion = pruning.pruningprm.posconversion
+		leftboundary = pruning.pruningprm.leftboundary
+		rightboundary = pruning.pruningprm.rightboundary
+		unismooth = pruning.pruningprm.posboundaryunismooth
+
 	else:
 		openbracket = [True for _ in range(lensent)]
 		closebracket = [True for _ in range(lensent)]
@@ -526,6 +544,34 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 				rule = &(grammar.bylhs[lhs][n])
 				item = lhs + cell
 				prevprob = chart._subtreeprob(item)
+
+				if posboundaryprio:
+					if left == 0:
+						lmax = pylog(leftboundary[lhs, len(posconversion)] * (1 - unismooth)
+								   + unismooth / grammar.nonterminals)   # START
+					else:
+						lmax = float('-Inf')
+						lcell = cellidx(left - 1, left, lensent, grammar.nonterminals)
+						for tagidx, ltag in enumerate(posconversion):
+							bl = pylog(leftboundary[lhs, tagidx] * (1 - unismooth)
+									 + unismooth / grammar.nonterminals) \
+								 + chart._subtreeprob(lcell + ltag)
+							if bl > lmax:
+								lmax = bl
+					if right == len(sent):
+						rmax = pylog(rightboundary[len(posconversion) + 1, lhs] * (1 - unismooth) + unismooth / (len(posconversion) + 2))
+					else:
+						rmax = float('-Inf')
+						rcell = cellidx(right, right + 1, lensent, grammar.nonterminals)
+						for tagidx, rtag in enumerate(posconversion):
+							br = pylog(rightboundary[tagidx, lhs] * (1 - unismooth)
+									 + unismooth / (len(posconversion) + 2)
+									 ) + chart._subtreeprob(rcell + rtag)
+							if br > rmax:
+								rmax += br
+					est = lmax + rmax
+					estimates.push_back(est)
+
 				while rule.lhs == lhs:
 					narrowr = midfilter.minright[left * nts + rule.rhs1]
 					narrowl = midfilter.minleft[right * nts + rule.rhs2]
@@ -553,7 +599,13 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 							continue
 						prob += chart._subtreeprob(rightitem)
 						if isfinite(prob):
-							if chart.updateprob(item, prob + rule.prob,
+							if CFGChart_fused is DenseCFGChart and \
+								chart.updateprob(item, prob + rule.prob,
+									beam_beta if span <= beam_delta else 0.0,
+									est if posboundaryprio else 0.0):
+								chart.addedge(item, mid, rule)
+							elif CFGChart_fused is SparseCFGChart and \
+								chart.updateprob(item, prob + rule.prob,
 									beam_beta if span <= beam_delta else 0.0):
 								chart.addedge(item, mid, rule)
 							else:
@@ -569,7 +621,9 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 
 			if CFGChart_fused is DenseCFGChart \
 				and beam_beta:
-				pruned += chart.prunecell(cell)
+				pruned += chart.prunecell(cell, estimates)
+
+			estimates.clear()
 
 	msg = '%s%s, blocked %s%s' % (
 			'' if chart else 'no parse; ', chart.stats(), blocked,
@@ -712,8 +766,12 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 					continue
 				lhs = lexrule.lhs
 				if tag is None or tagre.match(grammar.tolabel[lhs]):
-					chart.updateprob(cell + lhs,
+					if CFGChart_fused is SparseCFGChart:
+						chart.updateprob(cell + lhs,
 							lexrule.prob + reserveprob, 0.0)
+					if CFGChart_fused is DenseCFGChart:
+						chart.updateprob(cell + lhs,
+							lexrule.prob + reserveprob, 0.0, 0.0)
 					chart.addedge(cell + lhs, right, NULL)
 					recognized = True
 					if midfilter is not NULL:
@@ -739,8 +797,12 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 						blocked[0] += 1
 						continue
 					lhs = lexrule.lhs
-					chart.updateprob(cell + lhs,
-							lexrule.prob - pylog(openclassfactor), 0.0)
+					if CFGChart_fused is SparseCFGChart:
+						chart.updateprob(cell + lhs,
+								lexrule.prob - pylog(openclassfactor), 0.0)
+					if CFGChart_fused is DenseCFGChart:
+						chart.updateprob(cell + lhs,
+								lexrule.prob - pylog(openclassfactor), 0.0, 0.0)
 					chart.addedge(cell + lhs, right, NULL)
 					recognized = True
 					if midfilter is not NULL:
@@ -750,7 +812,10 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 		if not recognized and tag is not None:
 			for lhs in grammar.lexicallhs:
 				if tagre.match(grammar.tolabel[lhs]):
-					chart.updateprob(cell + lhs, 0.0, 0.0)
+					if CFGChart_fused is SparseCFGChart:
+						chart.updateprob(cell + lhs, 0.0, 0.0)
+					elif CFGChart_fused is DenseCFGChart:
+						chart.updateprob(cell + lhs, 0.0, 0.0, 0.0)
 					chart.addedge(cell + lhs, right, NULL)
 					recognized = True
 					if midfilter is not NULL:
@@ -820,7 +885,12 @@ cdef inline void applyunaryrules(
 				continue
 			item = cell + lhs
 			if rule.prob + prob < chart._subtreeprob(item):
-				if chart.updateprob(item, rule.prob + prob, 0.0):
+
+				if CFGChart_fused is SparseCFGChart and \
+					chart.updateprob(item, rule.prob + prob, 0.0):
+					unaryagenda.setifbetter(lhs, rule.prob + prob)
+				elif CFGChart_fused is DenseCFGChart and \
+					chart.updateprob(item, rule.prob + prob, 0.0, 0.0):
 					unaryagenda.setifbetter(lhs, rule.prob + prob)
 				else:
 					blocked += 1

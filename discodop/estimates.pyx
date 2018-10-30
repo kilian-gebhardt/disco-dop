@@ -17,9 +17,10 @@ from cython.operator cimport dereference
 from libc.stdint cimport uint8_t, uint32_t, uint64_t
 from libc.math cimport HUGE_VAL as INFINITY
 from libcpp.utility cimport pair
+from libcpp.vector cimport vector
 from .bit cimport nextset, nextunset, bitcount, bitlength, testbit
 from .containers cimport (SmallChartItemAgenda, Agenda, Chart, Grammar,
-		Label, Prob, ProbRule, LexicalRule, SmallChartItem)
+		Label, Prob, ProbRule, LexicalRule, SmallChartItem, StringIntDict)
 
 # from libc.math cimport isnan, isfinite  # conflicts with C++ std::isfinite
 cdef extern from "<cmath>" namespace "std" nogil:
@@ -681,6 +682,42 @@ cdef pcfgoutsidesxrec(Grammar grammar, list insidescores, dict outsidescores,
 			n += 1
 			rule = grammar.lbinary[state][n]
 	return score
+
+
+cpdef posboundaryestimates(trees, Grammar grammar):
+	cdef:
+		# double[: , :] leftboundary, rightboundary
+		short END
+		short tagidx = 0
+		StringIntDict tagids = StringIntDict()
+		vector[short] posconversion = []
+
+	for tagidx, tag in enumerate(grammar.getpos()):
+		tagids.ob[tag.encode('utf8')] = tagidx
+		posconversion.push_back(grammar.toid[tag])
+
+	tagids.ob['START'.encode('utf8')] = tagidx + 1
+	tagids.ob['END'.encode('utf8')] = END = tagidx + 2
+
+	leftboundary = np.zeros((grammar.nonterminals, END + 1), dtype='d')
+	rightboundary = np.zeros((END + 1, grammar.nonterminals), dtype='d')
+
+	for tree in trees:
+		for t in tree.subtrees():
+			mi = min(t.leaves()) - 1
+			ma = max(t.leaves()) + 1
+			pl = tree.pos()[mi][1].encode('utf8') if mi >= 0 else 'START'.encode('utf8')
+			pr = tree.pos()[ma][1].encode('utf8') if ma < len(tree.leaves()) else 'END'.encode('utf8')
+			leftboundary[grammar.toid[t.label], tagids.ob[pl]] += 1
+			rightboundary[tagids.ob[pr], grammar.toid[t.label]] += 1
+
+	# normalization
+	rowsums = leftboundary.sum(axis=1)
+	leftboundary = np.nan_to_num(leftboundary / rowsums[:, np.newaxis])
+
+	rowsums = rightboundary.sum(axis=1)
+	rightboundary = np.nan_to_num(rightboundary / rowsums[:, np.newaxis])
+	return posconversion, leftboundary, rightboundary
 
 
 cpdef testestimates(Grammar grammar, uint32_t maxlen, str rootlabel):
