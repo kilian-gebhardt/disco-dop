@@ -485,6 +485,8 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		double [:,:] leftboundary, rightboundary
 		vector[short] posconversion
 		double unismooth = 1.0e-5
+		double[:,:] leftboundaryscores
+		double[:,:] rightboundaryscores
 
 	# Create matrices to track minima and maxima for binary splits.
 	n = (lensent + 1) * nts + 1
@@ -506,6 +508,9 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		leftboundary = pruning.pruningprm.leftboundary
 		rightboundary = pruning.pruningprm.rightboundary
 		unismooth = pruning.pruningprm.posboundaryunismooth
+		if posboundaryprio:
+			leftboundaryscores = np.empty((lensent, grammar.nonterminals), dtype='d')
+			rightboundaryscores = np.empty((lensent - 1, grammar.nonterminals), dtype='d')
 
 	else:
 		openbracket = [True for _ in range(lensent)]
@@ -521,6 +526,37 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 			unaryagenda, None, &blocked, &midfilter, NULL, postagging)
 	if not covered:
 		return chart, msg
+
+	if posboundaryprio:
+		for left in range(0, lensent):
+			for lhs in range(1, grammar.nonterminals):
+				if left == 0:
+					lmax = pylog(leftboundary[lhs, len(posconversion)] * (1 - unismooth)
+							   + unismooth / grammar.nonterminals)   # START
+				else:
+					lmax = float('-Inf')
+					lcell = cellidx(left - 1, left, lensent, grammar.nonterminals)
+					for tagidx, ltag in enumerate(posconversion):
+						bl = pylog(leftboundary[lhs, tagidx] * (1 - unismooth)
+								 + unismooth / grammar.nonterminals) \
+							 + chart._subtreeprob(lcell + ltag)
+						if bl > lmax:
+							lmax = bl
+				leftboundaryscores[left, lhs] = lmax
+		for right in range(2, lensent + 1):
+			for lhs in range(1, grammar.nonterminals):
+				if right == len(sent):
+					rmax = pylog(rightboundary[len(posconversion) + 1, lhs] * (1 - unismooth) + unismooth / (len(posconversion) + 2))
+				else:
+					rmax = float('-Inf')
+					rcell = cellidx(right, right + 1, lensent, grammar.nonterminals)
+					for tagidx, rtag in enumerate(posconversion):
+						br = pylog(rightboundary[tagidx, lhs] * (1 - unismooth)
+								 + unismooth / (len(posconversion) + 2)
+								 ) + chart._subtreeprob(rcell + rtag)
+						if br > rmax:
+							rmax += br
+				rightboundaryscores[right-2, lhs] = rmax
 
 	for span in range(2, lensent + 1):
 		# constituents from left to right
@@ -546,30 +582,7 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 				prevprob = chart._subtreeprob(item)
 
 				if posboundaryprio:
-					if left == 0:
-						lmax = pylog(leftboundary[lhs, len(posconversion)] * (1 - unismooth)
-								   + unismooth / grammar.nonterminals)   # START
-					else:
-						lmax = float('-Inf')
-						lcell = cellidx(left - 1, left, lensent, grammar.nonterminals)
-						for tagidx, ltag in enumerate(posconversion):
-							bl = pylog(leftboundary[lhs, tagidx] * (1 - unismooth)
-									 + unismooth / grammar.nonterminals) \
-								 + chart._subtreeprob(lcell + ltag)
-							if bl > lmax:
-								lmax = bl
-					if right == len(sent):
-						rmax = pylog(rightboundary[len(posconversion) + 1, lhs] * (1 - unismooth) + unismooth / (len(posconversion) + 2))
-					else:
-						rmax = float('-Inf')
-						rcell = cellidx(right, right + 1, lensent, grammar.nonterminals)
-						for tagidx, rtag in enumerate(posconversion):
-							br = pylog(rightboundary[tagidx, lhs] * (1 - unismooth)
-									 + unismooth / (len(posconversion) + 2)
-									 ) + chart._subtreeprob(rcell + rtag)
-							if br > rmax:
-								rmax += br
-					est = lmax + rmax
+					est = leftboundaryscores[left, lhs] + rightboundaryscores[right-2, lhs]
 					estimates.push_back(est)
 
 				while rule.lhs == lhs:
