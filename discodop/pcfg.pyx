@@ -528,7 +528,7 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 	if not covered:
 		return chart, msg
 
-	if posboundaryprio:
+	if posboundaryprio and lensent > 1:
 		starttime = time.perf_counter()
 		for sentpos in range(0, lensent+2):
 
