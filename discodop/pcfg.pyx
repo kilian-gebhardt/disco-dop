@@ -534,10 +534,10 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 
 			if sentpos == 0:
 				leftboundaryscores[sentpos] \
-					= np.log(leftboundary[:,len(posconversion)] * (1 - unismooth)
+					= -np.log(leftboundary[:,len(posconversion)] * (1 - unismooth)
 						+ unismooth / grammar.nonterminals)
 			elif sentpos == lensent + 1:
-				rightboundaryscores[sentpos-3] = np.log(rightboundary[len(posconversion) + 1]
+				rightboundaryscores[sentpos-3] = -np.log(rightboundary[len(posconversion) + 1]
 													  * (1 - unismooth) + unismooth / (len(posconversion) + 2))
 			else:
 				lcell = cellidx(sentpos - 1, sentpos, lensent, grammar.nonterminals)
@@ -545,11 +545,11 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 							   + [0.0, 0.0])  # START, END of sentence
 
 				if sentpos < lensent - 1:
-					leftboundaryscores[sentpos] = np.log(
+					leftboundaryscores[sentpos] = -np.log(
 							np.max((unismooth / grammar.nonterminals) + (1-unismooth) *
 							leftboundary * vec, initial=0.0, axis=1))
 				if sentpos >= 3:
-					rightboundaryscores[sentpos-3] = np.log(np.max((unismooth / (len(posconversion) + 2)) + vec[:, None] * rightboundary * (1.0 - unismooth), initial=0, axis=0))
+					rightboundaryscores[sentpos-3] = -np.log(np.max((unismooth / (len(posconversion) + 2)) + vec[:, None] * rightboundary * (1.0 - unismooth), initial=0, axis=0))
 		logging.info("Predicted prioritization in %f seconds"
 					 % (time.perf_counter() - starttime))
 
