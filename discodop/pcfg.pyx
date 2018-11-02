@@ -546,10 +546,9 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 
 				if sentpos < lensent - 1:
 					leftboundaryscores[sentpos] = -np.log(
-							np.max((unismooth / grammar.nonterminals) + (1-unismooth) *
-							leftboundary * vec, initial=0.0, axis=1))
+							np.sum(((1-unismooth) * leftboundary + (unismooth / grammar.nonterminals)) * vec, initial=0.0, axis=1))
 				if sentpos >= 3:
-					rightboundaryscores[sentpos-3] = -np.log(np.max((unismooth / (len(posconversion) + 2)) + vec[:, None] * rightboundary * (1.0 - unismooth), initial=0, axis=0))
+					rightboundaryscores[sentpos-3] = -np.log(np.sum(vec[:, None] * (rightboundary * (1.0 - unismooth) + (unismooth / (len(posconversion) + 2))), initial=0, axis=0))
 		logging.info("Predicted prioritization in %f seconds"
 					 % (time.perf_counter() - starttime))
 
@@ -625,7 +624,7 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 					updatemidfilter(midfilter, left, right, lhs, nts)
 
 			applyunaryrules[CFGChart_fused](chart, left, right, cell, lastidx,
-					unaryagenda, &midfilter, &blocked, None)
+					unaryagenda, &midfilter, &blocked, None, estimates)
 
 			if CFGChart_fused is DenseCFGChart \
 				and beam_beta:
@@ -656,6 +655,7 @@ cdef parse_leftchildloop(sent, SparseCFGChart chart, tags,
 		short left, right, mid, span, lensent = len(sent)
 		CFGItem li
 		bint usemask = grammar.mask.size() != 0
+		vector[double] dummy = []
 	cellindex.resize(cellidx(lensent - 1, lensent, lensent, 1) + 2, 0)
 	if beam_beta:
 		chart.beambuckets.resize(
@@ -710,7 +710,7 @@ cdef parse_leftchildloop(sent, SparseCFGChart chart, tags,
 					li.dt = leftitem
 
 			applyunaryrules(chart, left, right, cell, lastidx, unaryagenda,
-					NULL, &blocked, whitelist)
+					NULL, &blocked, whitelist, dummy)
 			cellindex[ccell + 1] = chart.items.size()
 	msg = '%s%s, blocked %s' % (
 			'' if chart else 'no parse; ', chart.stats(), blocked)
@@ -839,7 +839,7 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 
 		# unary rules on the span of this POS tag
 		applyunaryrules[CFGChart_fused](chart, left, right, cell, lastidx,
-				unaryagenda, midfilter, blocked, whitelist)
+				unaryagenda, midfilter, blocked, whitelist, [])
 	if cellindex is not NULL:
 		cellindex[0][ccell + 1] = chart.items.size()
 	return True, ''
@@ -848,7 +848,7 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 cdef inline void applyunaryrules(
 		CFGChart_fused chart, short left, short right, uint64_t cell,
 		ItemNo lastidx, Agenda[Label, Prob]& unaryagenda, MidFilter *midfilter,
-		uint64_t *blocked, Whitelist whitelist):
+		uint64_t *blocked, Whitelist whitelist, vector[double] estimates):
 	"""Apply unary rules in a given cell."""
 	cdef:
 		Grammar grammar = chart.grammar
@@ -859,6 +859,7 @@ cdef inline void applyunaryrules(
 		uint64_t ccell = cellidx(left, right, chart.lensent, 1)
 		size_t nts = grammar.nonterminals
 		bint usemask = grammar.mask.size() != 0
+		double est = 0.0
 		# pair[Label, Prob] unaryentry
 		# vector[pair[Label, Prob]] unaryentries
 	# collect possible rhs items for unaries
@@ -883,6 +884,8 @@ cdef inline void applyunaryrules(
 		for n in range(grammar.numunary):
 			rule = &(grammar.unary[rhs1][n])
 			lhs = rule.lhs
+			if CFGChart_fused is DenseCFGChart and estimates.size() > 0:
+				est = estimates[lhs - 1]
 			if rule.rhs1 != rhs1:
 				break
 			elif (usemask and TESTBIT(&(grammar.mask[0]), rule.no)) or (
@@ -898,7 +901,7 @@ cdef inline void applyunaryrules(
 					chart.updateprob(item, rule.prob + prob, 0.0):
 					unaryagenda.setifbetter(lhs, rule.prob + prob)
 				elif CFGChart_fused is DenseCFGChart and \
-					chart.updateprob(item, rule.prob + prob, 0.0, 0.0):
+					chart.updateprob(item, rule.prob + prob, 0.0, est):
 					unaryagenda.setifbetter(lhs, rule.prob + prob)
 				else:
 					blocked += 1

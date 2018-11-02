@@ -712,11 +712,11 @@ cpdef posboundaryestimates(trees, Grammar grammar):
 			rightboundary[tagids.ob[pr], grammar.toid[t.label]] += 1
 
 	# normalization
-	rowsums = leftboundary.sum(axis=1)
-	leftboundary = np.nan_to_num(leftboundary / rowsums[:, np.newaxis])
+	rowsums = leftboundary.sum(axis=0)
+	leftboundary = np.nan_to_num(leftboundary / rowsums[np.newaxis, :])
 
-	rowsums = rightboundary.sum(axis=1)
-	rightboundary = np.nan_to_num(rightboundary / rowsums[:, np.newaxis])
+	rowsums = rightboundary.sum(axis=0)
+	rightboundary = np.nan_to_num(rightboundary / rowsums[np.newaxis, :])
 	return posconversion, leftboundary, rightboundary
 
 
