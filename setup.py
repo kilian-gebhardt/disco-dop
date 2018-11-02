@@ -105,6 +105,7 @@ if __name__ == '__main__':
 		extra_compile_args += ['-O3', '-march=native', '-DNDEBUG']
 		extra_link_args = ['-DNDEBUG']
 	if USE_CYTHON:
+		import numpy
 		ext_modules = cythonize(
 				[Extension(
 					'*',
@@ -112,7 +113,7 @@ if __name__ == '__main__':
 					extra_compile_args=extra_compile_args,
 					extra_link_args=extra_link_args,
 					language='c++',
-					# include_dirs=[...],
+					include_dirs=[numpy.get_include()],
 					# libraries=[...],
 					# library_dirs=[...],
 					)],

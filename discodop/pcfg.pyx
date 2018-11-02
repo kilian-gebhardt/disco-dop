@@ -1,11 +1,11 @@
 """CKY parser for Probabilistic Context-Free Grammar (PCFG)."""
 from __future__ import print_function
+import logging
 import re
-import sys
-import subprocess
-from os import unlink
+import time
 from math import exp, log as pylog
 from itertools import count
+cimport numpy as cnp
 import numpy as np
 from .tree import Tree
 from .util import which
@@ -482,12 +482,13 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		double est = 0.0
 		bint posboundaryprio = False
 		vector[Prob] estimates = []
-		double [:,:] leftboundary, rightboundary
 		vector[short] posconversion
 		double unismooth = 1.0e-5
-		double[:,:] leftboundaryscores
-		double[:,:] rightboundaryscores
-
+		double[:] vec
+		size_t lcell, rcell
+		double bl, br, lmax, rmax
+		cnp.ndarray leftboundary, rightboundary
+		cnp.ndarray leftboundaryscores, rightboundaryscores
 	# Create matrices to track minima and maxima for binary splits.
 	n = (lensent + 1) * nts + 1
 	midfilter.minleft.resize(n, -1)
@@ -509,7 +510,7 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		rightboundary = pruning.pruningprm.rightboundary
 		unismooth = pruning.pruningprm.posboundaryunismooth
 		if posboundaryprio:
-			leftboundaryscores = np.empty((lensent, grammar.nonterminals), dtype='d')
+			leftboundaryscores = np.empty((lensent - 1, grammar.nonterminals), dtype='d')
 			rightboundaryscores = np.empty((lensent - 1, grammar.nonterminals), dtype='d')
 
 	else:
@@ -528,35 +529,29 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		return chart, msg
 
 	if posboundaryprio:
-		for left in range(0, lensent):
-			for lhs in range(1, grammar.nonterminals):
-				if left == 0:
-					lmax = pylog(leftboundary[lhs, len(posconversion)] * (1 - unismooth)
-							   + unismooth / grammar.nonterminals)   # START
-				else:
-					lmax = float('-Inf')
-					lcell = cellidx(left - 1, left, lensent, grammar.nonterminals)
-					for tagidx, ltag in enumerate(posconversion):
-						bl = pylog(leftboundary[lhs, tagidx] * (1 - unismooth)
-								 + unismooth / grammar.nonterminals) \
-							 + chart._subtreeprob(lcell + ltag)
-						if bl > lmax:
-							lmax = bl
-				leftboundaryscores[left, lhs] = lmax
-		for right in range(2, lensent + 1):
-			for lhs in range(1, grammar.nonterminals):
-				if right == len(sent):
-					rmax = pylog(rightboundary[len(posconversion) + 1, lhs] * (1 - unismooth) + unismooth / (len(posconversion) + 2))
-				else:
-					rmax = float('-Inf')
-					rcell = cellidx(right, right + 1, lensent, grammar.nonterminals)
-					for tagidx, rtag in enumerate(posconversion):
-						br = pylog(rightboundary[tagidx, lhs] * (1 - unismooth)
-								 + unismooth / (len(posconversion) + 2)
-								 ) + chart._subtreeprob(rcell + rtag)
-						if br > rmax:
-							rmax += br
-				rightboundaryscores[right-2, lhs] = rmax
+		starttime = time.perf_counter()
+		for sentpos in range(0, lensent+2):
+
+			if sentpos == 0:
+				leftboundaryscores[sentpos] \
+					= np.log(leftboundary[:,len(posconversion)] * (1 - unismooth)
+						+ unismooth / grammar.nonterminals)
+			elif sentpos == lensent + 1:
+				rightboundaryscores[sentpos-3] = np.log(rightboundary[len(posconversion) + 1]
+													  * (1 - unismooth) + unismooth / (len(posconversion) + 2))
+			else:
+				lcell = cellidx(sentpos - 1, sentpos, lensent, grammar.nonterminals)
+				vec = np.array([chart._subtreeprob(lcell + ltag) for ltag in posconversion]
+							   + [0.0, 0.0])  # START, END of sentence
+
+				if sentpos < lensent - 1:
+					leftboundaryscores[sentpos] = np.log(
+							np.max((unismooth / grammar.nonterminals) + (1-unismooth) *
+							leftboundary * vec, initial=0.0, axis=1))
+				if sentpos >= 3:
+					rightboundaryscores[sentpos-3] = np.log(np.max((unismooth / (len(posconversion) + 2)) + vec[:, None] * rightboundary * (1.0 - unismooth), initial=0, axis=0))
+		logging.info("Predicted prioritization in %f seconds"
+					 % (time.perf_counter() - starttime))
 
 	for span in range(2, lensent + 1):
 		# constituents from left to right
