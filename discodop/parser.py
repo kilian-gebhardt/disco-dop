@@ -167,7 +167,7 @@ class PruningPrm:
 		self.posconversion = []  # a list from tagids to the grammar's nont ids
 		self.leftboundary = None  # stores P(A_{l,r} | t_{l-1} )
 		self.rightboundary = None  # stores P(t{r+1) | A_r)
-		self.posboundaryunismooth = 1.0e-5  # smoothing for pos boundary
+		self.posboundaryunismooth = 1.0e-3  # smoothing for pos boundary
 
 
 class Parser(object):

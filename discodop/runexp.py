@@ -410,7 +410,7 @@ def startexp(
 			print(leftboundary)
 			print(rightboundary)
 
-	if prm.pruningprm.posboundaryprio:
+	if prm.pruningprm and prm.pruningprm.posboundaryprio:
 		prm.pruningprm.leftboundary \
 			= - np.log((1 - prm.pruningprm.posboundaryunismooth)
 							* prm.pruningprm.leftboundary

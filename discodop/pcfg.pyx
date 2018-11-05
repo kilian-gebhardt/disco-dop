@@ -549,8 +549,6 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 				if sentpos < lensent - 1:
 					leftboundaryscores[sentpos] = np.min(vec + leftboundary,
 							initial=INFINITY, axis=1)
-					if sentpos == 3:
-						print("vec[2]:", vec[:])
 				if sentpos >= 3:
 					rightboundaryscores[sentpos-3] = np.min(vec[:, None] + rightboundary,
 							initial=INFINITY, axis=0)
