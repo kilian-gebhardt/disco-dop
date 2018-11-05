@@ -507,10 +507,12 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		posboundaryprio = pruning.pruningprm.posboundaryprio
 		posconversion = pruning.pruningprm.posconversion
 		unismooth = pruning.pruningprm.posboundaryunismooth
-		leftboundary = - np.log((1-unismooth) * pruning.pruningprm.leftboundary
-								+ (unismooth / grammar.nonterminals))
-		rightboundary = -np.log(pruning.pruningprm.rightboundary * (1.0 - unismooth)
-								 + (unismooth / (len(posconversion) + 2)))
+		leftboundary = pruning.pruningprm.leftboundary
+		rightboundary = pruning.pruningprm.rightboundary
+		# leftboundary = - np.log((1-unismooth) * pruning.pruningprm.leftboundary
+		# 						+ (unismooth / grammar.nonterminals))
+		# rightboundary = -np.log(pruning.pruningprm.rightboundary * (1.0 - unismooth)
+		# 						 + (unismooth / (len(posconversion) + 2)))
 		if posboundaryprio:
 			leftboundaryscores = np.empty((lensent - 1, grammar.nonterminals), dtype='d')
 			rightboundaryscores = np.empty((lensent - 1, grammar.nonterminals), dtype='d')

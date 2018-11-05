@@ -410,6 +410,18 @@ def startexp(
 			print(leftboundary)
 			print(rightboundary)
 
+	if prm.pruningprm.posboundaryprio:
+		prm.pruningprm.leftboundary \
+			= - np.log((1 - prm.pruningprm.posboundaryunismooth)
+							* prm.pruningprm.leftboundary
+						+ (prm.pruningprm.posboundaryunismooth
+							/ prm.stages[0].grammar.nonterminals))
+		prm.pruningprm.rightboundary \
+			= -np.log((1.0 - prm.pruningprm.posboundaryunismooth)
+							* prm.pruningprm.rightboundary
+						+ prm.pruningprm.posboundaryunismooth
+							/(len(prm.pruningprm.posconversion) + 2))
+
 	evalparam = evalmod.readparam(prm.evalparam)
 	evalparam['DEBUG'] = -1
 	evalparam['CUTOFF_LEN'] = 40
