@@ -43,8 +43,8 @@ cdef RankedEdgeAgenda[Prob] getcandidates(Chart chart, ItemNo v, int k):
 				prob += chart.subtreeprob(chart._right(v, e))
 			else:
 				right = -1
-		if isinf(prob):
-			continue
+		# if isinf(prob):
+		# 	continue
 		re = RankedEdge(e, left, right)
 		entry.first = re
 		entry.second = prob

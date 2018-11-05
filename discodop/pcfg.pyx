@@ -133,7 +133,7 @@ cdef class DenseCFGChart(CFGChart):
 			if (isfinite(self.probs[item])
 					and self.probs[item] + est > self.beambuckets[beamitem]):
 				self.probs[item] = INFINITY
-				self.parseforest[item].clear()
+				# self.parseforest[item].clear()
 				pruning_counter += 1
 		return pruning_counter
 
