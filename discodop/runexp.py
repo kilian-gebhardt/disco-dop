@@ -221,6 +221,20 @@ def startexp(
 				except FileNotFoundError:
 					trainpruningmodels = True
 
+			if 'posboundaryprio' in prm.pruning:
+				try:
+					leftboundaryfile = os.path.join(pruningpath, 'leftboundary.npy')
+					rightboundaryfile = os.path.join(pruningpath, 'rightboundary.npy')
+					posconversionfile = os.path.join(pruningpath, 'posconversion.npy')
+					if prm.pruningprm is None:
+						prm.pruningprm = parser.PruningPrm(None, None)
+					prm.pruningprm.leftboundary = np.load(leftboundaryfile)
+					prm.pruningprm.rightboundary = np.load(rightboundaryfile)
+					prm.pruningprm.posconversion = np.load(posconversionfile)
+					prm.pruningprm.posboundaryprio = True
+				except FileNotFoundError:
+					trainpruningmodels = True
+
 			if trainpruningmodels:
 				trees, sentsoriginal, _ = loadtraincorpus(
 					prm.corpusfmt, prm.traincorpus, prm.binarization, prm.punct,
@@ -244,6 +258,11 @@ def startexp(
 					prm.numproc, lexmodel, top)
 
 	if trainpruningmodels and prm.stages[0].split:
+		pruningdir = os.path.join(resultdir, "pruning")
+		for d in [pruningdir]:
+			if not os.path.exists(d):
+				os.mkdir(d)
+
 		def preparepcfgtrees(_trees, _sents):
 			_trees = dobinarization(_trees, _sents, prm.binarization,
 									prm.relationalrealizational)
@@ -265,11 +284,6 @@ def startexp(
 		if prm.pruning == 'ocbrackets':
 			stage = prm.stages[0]
 
-
-			pruningdir = os.path.join(resultdir, "pruning")
-			for d in [pruningdir]:
-				if not os.path.exists(d):
-					os.mkdir(d)
 			pruningtrain = os.path.join(pruningdir, "train.txt")
 			pruningtraintrees = os.path.join(pruningdir, "train.export")
 			pruningtest = os.path.join(pruningdir, "test.txt")
@@ -335,12 +349,6 @@ def startexp(
 							_train_tagged_sents[n], block))
 								for n, block in _train_blocks.items())
 
-			pruningdir = os.path.join(resultdir, "pruning")
-
-			for d in [pruningdir]:
-				if not os.path.exists(d):
-					os.mkdir(d)
-
 			if prm.pruningprm is None:
 				prm.pruningprm = parser.PruningPrm(None, None)
 
@@ -383,9 +391,10 @@ def startexp(
 			pcfgtrees = preparepcfgtrees([t.copy(True) for t in trees], sentsoriginal)
 			# print(type(pcfgtrees))
 			# print(pcfgtrees)
+			dummy = 'dummy' in prm.pruning
 
 			posconversion, leftboundary, rightboundary \
-				= posboundaryestimates(pcfgtrees, stage.grammar)
+				= posboundaryestimates(pcfgtrees, stage.grammar, dummy)
 
 			if prm.pruningprm is None:
 				prm.pruningprm = parser.PruningPrm(None, None)
@@ -394,6 +403,9 @@ def startexp(
 			prm.pruningprm.leftboundary = leftboundary
 			prm.pruningprm.rightboundary = rightboundary
 
+			np.save(os.path.join(pruningdir, 'leftboundary.npy'), leftboundary)
+			np.save(os.path.join(pruningdir, 'rightboundary.npy'), rightboundary)
+			np.save(os.path.join(pruningdir, 'posconversion.npy'), posconversion)
 			print(posconversion)
 			print(leftboundary)
 			print(rightboundary)

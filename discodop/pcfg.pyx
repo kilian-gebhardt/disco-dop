@@ -506,9 +506,11 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		dynamicbeams = pruning.dynamicbeams
 		posboundaryprio = pruning.pruningprm.posboundaryprio
 		posconversion = pruning.pruningprm.posconversion
-		leftboundary = pruning.pruningprm.leftboundary
-		rightboundary = pruning.pruningprm.rightboundary
 		unismooth = pruning.pruningprm.posboundaryunismooth
+		leftboundary = - np.log((1-unismooth) * pruning.pruningprm.leftboundary
+								+ (unismooth / grammar.nonterminals))
+		rightboundary = -np.log(pruning.pruningprm.rightboundary * (1.0 - unismooth)
+								 + (unismooth / (len(posconversion) + 2)))
 		if posboundaryprio:
 			leftboundaryscores = np.empty((lensent - 1, grammar.nonterminals), dtype='d')
 			rightboundaryscores = np.empty((lensent - 1, grammar.nonterminals), dtype='d')
@@ -534,23 +536,29 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 
 			if sentpos == 0:
 				leftboundaryscores[sentpos] \
-					= -np.log(leftboundary[:,len(posconversion)] * (1 - unismooth)
-						+ unismooth / grammar.nonterminals)
+					= leftboundary[:,len(posconversion)]
 			elif sentpos == lensent + 1:
-				rightboundaryscores[sentpos-3] = -np.log(rightboundary[len(posconversion) + 1]
-													  * (1 - unismooth) + unismooth / (len(posconversion) + 2))
+				rightboundaryscores[sentpos-3] = rightboundary[len(posconversion) + 1]
 			else:
 				lcell = cellidx(sentpos - 1, sentpos, lensent, grammar.nonterminals)
 				vec = np.array([chart._subtreeprob(lcell + ltag) for ltag in posconversion]
 							   + [0.0, 0.0])  # START, END of sentence
 
 				if sentpos < lensent - 1:
-					leftboundaryscores[sentpos] = -np.log(
-							np.sum(((1-unismooth) * leftboundary + (unismooth / grammar.nonterminals)) * vec, initial=0.0, axis=1))
+					leftboundaryscores[sentpos] = np.min(vec + leftboundary,
+							initial=INFINITY, axis=1)
+					if sentpos == 3:
+						print("vec[2]:", vec[:])
 				if sentpos >= 3:
-					rightboundaryscores[sentpos-3] = -np.log(np.sum(vec[:, None] * (rightboundary * (1.0 - unismooth) + (unismooth / (len(posconversion) + 2))), initial=0, axis=0))
+					rightboundaryscores[sentpos-3] = np.min(vec[:, None] + rightboundary,
+							initial=INFINITY, axis=0)
 		logging.info("Predicted prioritization in %f seconds"
 					 % (time.perf_counter() - starttime))
+
+		if lensent > 5:
+			for i in range(4):
+				print("left[%d]" % i, leftboundaryscores[i])
+				print("right[%d]"% (i + 2), rightboundaryscores[i])
 
 	for span in range(2, lensent + 1):
 		# constituents from left to right

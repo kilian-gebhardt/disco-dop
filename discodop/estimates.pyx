@@ -684,7 +684,7 @@ cdef pcfgoutsidesxrec(Grammar grammar, list insidescores, dict outsidescores,
 	return score
 
 
-cpdef posboundaryestimates(trees, Grammar grammar):
+cpdef posboundaryestimates(trees, Grammar grammar, bint dummy=False):
 	cdef:
 		# double[: , :] leftboundary, rightboundary
 		short END
@@ -699,17 +699,20 @@ cpdef posboundaryestimates(trees, Grammar grammar):
 	tagids.ob['START'.encode('utf8')] = tagidx + 1
 	tagids.ob['END'.encode('utf8')] = END = tagidx + 2
 
-	leftboundary = np.zeros((grammar.nonterminals, END + 1), dtype='d')
-	rightboundary = np.zeros((END + 1, grammar.nonterminals), dtype='d')
-
-	for tree in trees:
-		for t in tree.subtrees():
-			mi = min(t.leaves()) - 1
-			ma = max(t.leaves()) + 1
-			pl = tree.pos()[mi][1].encode('utf8') if mi >= 0 else 'START'.encode('utf8')
-			pr = tree.pos()[ma][1].encode('utf8') if ma < len(tree.leaves()) else 'END'.encode('utf8')
-			leftboundary[grammar.toid[t.label], tagids.ob[pl]] += 1
-			rightboundary[tagids.ob[pr], grammar.toid[t.label]] += 1
+	if dummy:
+		leftboundary = np.ones((grammar.nonterminals, END+1), dtype='d')
+		rightboundary = np.ones((END + 1, grammar.nonterminals), dtype='d')
+	else:
+		leftboundary = np.zeros((grammar.nonterminals, END + 1), dtype='d')
+		rightboundary = np.zeros((END + 1, grammar.nonterminals), dtype='d')
+		for tree in trees:
+			for t in tree.subtrees():
+				mi = min(t.leaves()) - 1
+				ma = max(t.leaves()) + 1
+				pl = tree.pos()[mi][1].encode('utf8') if mi >= 0 else 'START'.encode('utf8')
+				pr = tree.pos()[ma][1].encode('utf8') if ma < len(tree.leaves()) else 'END'.encode('utf8')
+				leftboundary[grammar.toid[t.label], tagids.ob[pl]] += 1
+				rightboundary[tagids.ob[pr], grammar.toid[t.label]] += 1
 
 	# normalization
 	rowsums = leftboundary.sum(axis=0)
