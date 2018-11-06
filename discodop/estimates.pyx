@@ -686,7 +686,6 @@ cdef pcfgoutsidesxrec(Grammar grammar, list insidescores, dict outsidescores,
 
 cpdef posboundaryestimates(trees, Grammar grammar, bint dummy=False):
 	cdef:
-		# double[: , :] leftboundary, rightboundary
 		short END
 		short tagidx = 0
 		StringIntDict tagids = StringIntDict()
@@ -721,6 +720,50 @@ cpdef posboundaryestimates(trees, Grammar grammar, bint dummy=False):
 	rowsums = rightboundary.sum(axis=0)
 	rightboundary = np.nan_to_num(rightboundary / rowsums[np.newaxis, :])
 	return posconversion, leftboundary, rightboundary
+
+
+cpdef pbetagger(trees, sents, Grammar grammar, tagger, batchsize):
+	cdef:
+		int x, mi, ma
+	leftboundary = np.zeros((grammar.nonterminals, tagger.tagset_size), dtype='d')
+	rightboundary = np.zeros((tagger.tagset_size, grammar.nonterminals), dtype='d')
+
+	tslist = list(zip(trees, sents))
+
+	from flair.data import Sentence
+	from torch.nn.functional import softmax
+
+	for batchstart in range(0, len(tslist), batchsize):
+		batch = tslist[batchstart:batchstart + batchsize]
+		batchsents = []
+		for x, (_, s) in enumerate(batch):
+			sent = Sentence(' '.join(s))
+			sent.add_label(str(x))
+			batchsents.append(sent)
+		features, _, _ = tagger.forward(batchsents)
+		distributions = softmax(features.detach(), dim=2)
+
+		for x, sent in enumerate(batchsents):
+			tree, _ = batch[int(sent.labels[0].value)]
+			for t in tree.subtrees():
+				mi = min(t.leaves()) - 1
+				if mi == -1:
+					leftboundary[grammar.toid[t.label], tagger.tag_dictionary.item2idx[b'<START>']] += 1
+				else:
+					leftboundary[grammar.toid[t.label], :] += distributions[x, mi]
+				ma = max(t.leaves()) + 1
+				if ma >= len(sent):
+					rightboundary[tagger.tag_dictionary.item2idx[b'<STOP>'], grammar.toid[t.label]] += 1
+				else:
+					rightboundary[: , grammar.toid[t.label]] += distributions[x, ma]
+
+	# normalization
+	rowsums = leftboundary.sum(axis=0)
+	leftboundary = np.nan_to_num(leftboundary / rowsums[np.newaxis, :])
+
+	rowsums = rightboundary.sum(axis=0)
+	rightboundary = np.nan_to_num(rightboundary / rowsums[np.newaxis, :])
+	return leftboundary, rightboundary
 
 
 cpdef testestimates(Grammar grammar, uint32_t maxlen, str rootlabel):

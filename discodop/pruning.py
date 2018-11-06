@@ -24,6 +24,7 @@ class PruningMask:
 		self.closebracket = []
 		self.dynamicbeams = []
 		self.pruningprm = None
+		self.posprobabilities = None
 
 
 def predictpruningmask(testset: OrderedDict, obtagger: SequenceTagger,

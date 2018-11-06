@@ -117,7 +117,7 @@ cdef class DenseCFGChart(CFGChart):
 			self.items.push_back(item)
 		return True
 
-	cdef int prunecell(self, uint64_t cell, vector[Prob] estimates):
+	cdef int prunecell(self, uint64_t cell, Prob[:] left, Prob[:] right, bint useest):
 		"""Set 0 probability to each item of a cell that falls outside the beam. 
 		
 		Return number of pruned items."""
@@ -128,8 +128,8 @@ cdef class DenseCFGChart(CFGChart):
 		beamitem = cell // self.grammar.nonterminals
 		for nont in range(1, self.grammar.nonterminals):
 			item = cell + nont
-			if estimates.size() > 0:
-				est = estimates[nont - 1]
+			if useest:
+				est = left[nont] + right[nont]
 			if (isfinite(self.probs[item])
 					and self.probs[item] + est > self.beambuckets[beamitem]):
 				self.probs[item] = INFINITY
@@ -481,14 +481,13 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		vector[Prob] dynamicbeams
 		double est = 0.0
 		bint posboundaryprio = False
-		vector[Prob] estimates = []
 		vector[short] posconversion
-		double unismooth = 1.0e-5
 		double[:] vec
 		size_t lcell, rcell
 		double bl, br, lmax, rmax
 		cnp.ndarray leftboundary, rightboundary
 		cnp.ndarray leftboundaryscores, rightboundaryscores
+		bint postpruning = True
 	# Create matrices to track minima and maxima for binary splits.
 	n = (lensent + 1) * nts + 1
 	midfilter.minleft.resize(n, -1)
@@ -506,16 +505,12 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		dynamicbeams = pruning.dynamicbeams
 		posboundaryprio = pruning.pruningprm.posboundaryprio
 		posconversion = pruning.pruningprm.posconversion
-		unismooth = pruning.pruningprm.posboundaryunismooth
 		leftboundary = pruning.pruningprm.leftboundary
 		rightboundary = pruning.pruningprm.rightboundary
-		# leftboundary = - np.log((1-unismooth) * pruning.pruningprm.leftboundary
-		# 						+ (unismooth / grammar.nonterminals))
-		# rightboundary = -np.log(pruning.pruningprm.rightboundary * (1.0 - unismooth)
-		# 						 + (unismooth / (len(posconversion) + 2)))
 		if posboundaryprio:
 			leftboundaryscores = np.empty((lensent - 1, grammar.nonterminals), dtype='d')
 			rightboundaryscores = np.empty((lensent - 1, grammar.nonterminals), dtype='d')
+		postpruning = pruning.pruningprm.postpruning
 
 	else:
 		openbracket = [True for _ in range(lensent)]
@@ -537,13 +532,22 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		for sentpos in range(0, lensent+2):
 
 			if sentpos == 0:
+				sstart = pruning.pruningprm.postagger.tag_dictionary.item2idx[b'<START>'] \
+					if pruning.pruningprm.posboundaryprio == 'externalpos' \
+					else len(posconversion)
 				leftboundaryscores[sentpos] \
-					= leftboundary[:,len(posconversion)]
+					= leftboundary[:,sstart]
 			elif sentpos == lensent + 1:
-				rightboundaryscores[sentpos-3] = rightboundary[len(posconversion) + 1]
+				sstop = pruning.pruningprm.postagger.tag_dictionary.item2idx[b'<STOP>'] \
+					if pruning.pruningprm.posboundaryprio == 'externalpos' \
+					else len(posconversion) + 1
+				rightboundaryscores[sentpos-3] = rightboundary[sstop]
 			else:
-				lcell = cellidx(sentpos - 1, sentpos, lensent, grammar.nonterminals)
-				vec = np.array([chart._subtreeprob(lcell + ltag) for ltag in posconversion]
+				if pruning.pruningprm.posboundaryprio == 'externalpos':
+					vec = -np.log(pruning.posprobabilities[sentpos - 1]).astype(np.double)
+				else:
+					lcell = cellidx(sentpos - 1, sentpos, lensent, grammar.nonterminals)
+					vec = np.array([chart._subtreeprob(lcell + ltag) for ltag in posconversion]
 							   + [0.0, 0.0])  # START, END of sentence
 
 				if sentpos < lensent - 1:
@@ -554,11 +558,11 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 							initial=INFINITY, axis=0)
 		logging.info("Predicted prioritization in %f seconds"
 					 % (time.perf_counter() - starttime))
-
-		if lensent > 5:
-			for i in range(4):
-				print("left[%d]" % i, leftboundaryscores[i])
-				print("right[%d]"% (i + 2), rightboundaryscores[i])
+		#
+		# if lensent > 5:
+		# 	for i in range(4):
+		# 		print("left[%d]" % i, leftboundaryscores[i])
+		# 		print("right[%d]"% (i + 2), rightboundaryscores[i])
 
 	for span in range(2, lensent + 1):
 		# constituents from left to right
@@ -585,7 +589,6 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 
 				if posboundaryprio:
 					est = leftboundaryscores[left, lhs] + rightboundaryscores[right-2, lhs]
-					estimates.push_back(est)
 
 				while rule.lhs == lhs:
 					narrowr = midfilter.minright[left * nts + rule.rhs1]
@@ -632,13 +635,16 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 					updatemidfilter(midfilter, left, right, lhs, nts)
 
 			applyunaryrules[CFGChart_fused](chart, left, right, cell, lastidx,
-					unaryagenda, &midfilter, &blocked, None, estimates)
+					unaryagenda, &midfilter, &blocked, None,
+					leftboundaryscores[left] if posboundaryprio else None,
+					rightboundaryscores[right-2] if posboundaryprio else None)
 
-			if CFGChart_fused is DenseCFGChart \
+			if postpruning and CFGChart_fused is DenseCFGChart \
 				and beam_beta:
-				pruned += chart.prunecell(cell, estimates)
-
-			estimates.clear()
+				pruned += chart.prunecell(cell,
+					leftboundaryscores[left] if posboundaryprio else None,
+					rightboundaryscores[right-2] if posboundaryprio else None,
+					posboundaryprio)
 
 	msg = '%s%s, blocked %s%s' % (
 			'' if chart else 'no parse; ', chart.stats(), blocked,
@@ -663,7 +669,7 @@ cdef parse_leftchildloop(sent, SparseCFGChart chart, tags,
 		short left, right, mid, span, lensent = len(sent)
 		CFGItem li
 		bint usemask = grammar.mask.size() != 0
-		vector[double] dummy = []
+		Prob[:] dummy = None
 	cellindex.resize(cellidx(lensent - 1, lensent, lensent, 1) + 2, 0)
 	if beam_beta:
 		chart.beambuckets.resize(
@@ -718,7 +724,7 @@ cdef parse_leftchildloop(sent, SparseCFGChart chart, tags,
 					li.dt = leftitem
 
 			applyunaryrules(chart, left, right, cell, lastidx, unaryagenda,
-					NULL, &blocked, whitelist, dummy)
+					NULL, &blocked, whitelist, dummy, dummy)
 			cellindex[ccell + 1] = chart.items.size()
 	msg = '%s%s, blocked %s' % (
 			'' if chart else 'no parse; ', chart.stats(), blocked)
@@ -847,7 +853,7 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 
 		# unary rules on the span of this POS tag
 		applyunaryrules[CFGChart_fused](chart, left, right, cell, lastidx,
-				unaryagenda, midfilter, blocked, whitelist, [])
+				unaryagenda, midfilter, blocked, whitelist, None, None)
 	if cellindex is not NULL:
 		cellindex[0][ccell + 1] = chart.items.size()
 	return True, ''
@@ -856,7 +862,8 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 cdef inline void applyunaryrules(
 		CFGChart_fused chart, short left, short right, uint64_t cell,
 		ItemNo lastidx, Agenda[Label, Prob]& unaryagenda, MidFilter *midfilter,
-		uint64_t *blocked, Whitelist whitelist, vector[double] estimates):
+		uint64_t *blocked, Whitelist whitelist, Prob[:] leftboundary,
+		Prob[:] rightboundary):
 	"""Apply unary rules in a given cell."""
 	cdef:
 		Grammar grammar = chart.grammar
@@ -892,8 +899,8 @@ cdef inline void applyunaryrules(
 		for n in range(grammar.numunary):
 			rule = &(grammar.unary[rhs1][n])
 			lhs = rule.lhs
-			if CFGChart_fused is DenseCFGChart and estimates.size() > 0:
-				est = estimates[lhs - 1]
+			if CFGChart_fused is DenseCFGChart and leftboundary is not None:
+				est = leftboundary[lhs] + rightboundary[lhs]
 			if rule.rhs1 != rhs1:
 				break
 			elif (usemask and TESTBIT(&(grammar.mask[0]), rule.no)) or (

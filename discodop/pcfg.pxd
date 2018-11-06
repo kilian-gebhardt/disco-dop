@@ -62,7 +62,7 @@ cdef class DenseCFGChart(CFGChart):
 	cpdef Prob _subtreeprob(self, uint64_t item)
 	cpdef Prob getbeambucket(self, size_t cell)
 	cdef bint _hasitem(self, uint64_t item)
-	cdef int prunecell(self, uint64_t cell, vector[Prob] estimates)
+	cdef int prunecell(self, uint64_t cell, Prob[:], Prob[:], bint)
 
 
 @cython.final

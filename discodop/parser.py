@@ -168,6 +168,8 @@ class PruningPrm:
 		self.leftboundary = None  # stores P(A_{l,r} | t_{l-1} )
 		self.rightboundary = None  # stores P(t{r+1) | A_r)
 		self.posboundaryunismooth = 1.0e-3  # smoothing for pos boundary
+		self.postagger = None
+		self.postpruning = True
 
 
 class Parser(object):

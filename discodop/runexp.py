@@ -23,6 +23,7 @@ from . import (__version__, treebank, treebanktransforms, treetransforms,
 from .treetransforms import binarizetree
 from .util import workerfunc
 from .containers import Grammar
+import ctypes
 
 INTERNALPARAMS = None
 
@@ -230,8 +231,13 @@ def startexp(
 						prm.pruningprm = parser.PruningPrm(None, None)
 					prm.pruningprm.leftboundary = np.load(leftboundaryfile)
 					prm.pruningprm.rightboundary = np.load(rightboundaryfile)
-					prm.pruningprm.posconversion = np.load(posconversionfile)
-					prm.pruningprm.posboundaryprio = True
+					if 'externalpos' in prm.pruning:
+						prm.pruningprm.posboundaryprio = 'externalpos'
+						from flair.models import SequenceTagger
+						prm.pruningprm.postagger = SequenceTagger.load('de-pos')
+					else:
+						prm.pruningprm.posconversion = np.load(posconversionfile)
+						prm.pruningprm.posboundaryprio = True
 				except FileNotFoundError:
 					trainpruningmodels = True
 
@@ -385,30 +391,38 @@ def startexp(
 				prm.pruningprm.beampred = True
 
 		elif 'posboundaryprio' in prm.pruning:
-			from .estimates import posboundaryestimates
+			from .estimates import posboundaryestimates, pbetagger
 			stage = prm.stages[0]
 
 			pcfgtrees = preparepcfgtrees([t.copy(True) for t in trees], sentsoriginal)
 			# print(type(pcfgtrees))
 			# print(pcfgtrees)
-			dummy = 'dummy' in prm.pruning
-
-			posconversion, leftboundary, rightboundary \
-				= posboundaryestimates(pcfgtrees, stage.grammar, dummy)
 
 			if prm.pruningprm is None:
 				prm.pruningprm = parser.PruningPrm(None, None)
-			prm.pruningprm.posboundaryprio = True
-			prm.pruningprm.posconversion = posconversion
+
+			if 'externalpos' in prm.pruning:
+				from flair.models import SequenceTagger
+				prm.pruningprm.postagger = tagger = SequenceTagger.load('de-pos')
+				leftboundary, rightboundary = pbetagger(pcfgtrees, sentsoriginal, stage.grammar, tagger, 32)
+				prm.pruningprm.posboundaryprio = 'externalpos'
+			else:
+				dummy = 'dummy' in prm.pruning
+				posconversion, leftboundary, rightboundary \
+					= posboundaryestimates(pcfgtrees, stage.grammar, dummy)
+				prm.pruningprm.posconversion = posconversion
+				prm.pruningprm.posboundaryprio = True
+				np.save(os.path.join(pruningdir, 'posconversion.npy'), posconversion)
+
 			prm.pruningprm.leftboundary = leftboundary
 			prm.pruningprm.rightboundary = rightboundary
-
 			np.save(os.path.join(pruningdir, 'leftboundary.npy'), leftboundary)
 			np.save(os.path.join(pruningdir, 'rightboundary.npy'), rightboundary)
-			np.save(os.path.join(pruningdir, 'posconversion.npy'), posconversion)
-			print(posconversion)
+
 			print(leftboundary)
 			print(rightboundary)
+			print('left sums', np.sum(leftboundary, axis=0))
+			print('right sums', np.sum(rightboundary, axis=0))
 
 	if prm.pruningprm and prm.pruningprm.posboundaryprio:
 		prm.pruningprm.leftboundary \
@@ -835,6 +849,55 @@ def doparsing(**kwds):
 					pruningprm.dynamicbeampredictor)
 			logging.info("Predicted dynamic beams in %.1fs"
 						% (time.perf_counter() - c))
+		elif pruningprm.posboundaryprio == "externalpos":
+			from .pruning import PruningMask
+			from flair.data import Sentence
+			from flair.models.sequence_tagger_model import clear_embeddings
+			c = time.perf_counter()
+			testset = params.testset
+
+			logging.info("Prediction of external POS for POS boundaries in batch mode")
+			pruningmasks: OrderedDict[int, PruningMask] \
+				= OrderedDict((n, PruningMask()) for (n, _) in testset.items())
+			sentences = OrderedDict((n, Sentence(' '.join([w for w, _ in sent])))
+									for (n, (_, _, sent, _)) in testset.items())
+			from typing import List
+			sentences_list: List[Sentence] = []
+			mini_batch_size = 32
+
+			for n in pruningmasks:
+				sentences[n].add_label(n)
+				sentences_list.append(sentences[n])
+
+			# make mini-batches
+			batches = [sentences_list[x:x + mini_batch_size] for x in
+					   range(0, len(sentences_list), mini_batch_size)]
+
+			tagger = pruningprm.postagger
+
+			from torch.nn.functional import softmax
+			from flair.models.sequence_tagger_model import clear_embeddings
+			for batch in batches:
+				clear_embeddings(batch)
+				features, _, _ = tagger.forward(batch)
+				features = softmax(features.detach(), dim=2)
+
+				for x, sent in enumerate(batch):
+					try:
+						n = sent.labels[0].value
+						pruningmasks[n].posprobabilities = features[x][:len(sent)].numpy()
+						pruningmasks[n].openbracket = [True for _ in sent]
+						pruningmasks[n].closebracket = [True for _ in sent]
+						pruningmasks[n].pruningprm = pruningprm
+					except KeyError:
+						print(sent.labels, x, sent, features.shape)
+						raise KeyError
+
+			pruningprm.pruningmasks = pruningmasks
+			logging.info("Prediction of external POS for POS boundaries in batch mode")
+			logging.info("Predicted external POS in %.1fs"
+						 % (time.perf_counter() - c))
+
 		elif pruningprm.posboundaryprio:
 			from .pruning import PruningMask
 
