@@ -425,6 +425,7 @@ def startexp(
 			print('right sums', np.sum(rightboundary, axis=0))
 
 	if prm.pruningprm and prm.pruningprm.posboundaryprio:
+		prm.pruningprm.posboundaryunismooth = prm.posboundarysmoothing
 		prm.pruningprm.leftboundary \
 			= - np.log((1 - prm.pruningprm.posboundaryunismooth)
 							* prm.pruningprm.leftboundary

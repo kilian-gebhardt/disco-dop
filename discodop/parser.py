@@ -87,7 +87,9 @@ DEFAULTS = dict(
 		pruning=None,  # choices: None, 'ocbrackets', 'dynamicbeamsgold', 'dynamicbeamspredict'
 		abortafterpruninggeneration=False,
 		abortafterpruningtraining=False,
-		resumepruningtraining=False)
+		resumepruningtraining=False,
+		posboundarysmoothing=1.0e-3,
+		)
 
 DEFAULTSTAGE = dict(
 		name='stage1',  # identifier, used for filenames
