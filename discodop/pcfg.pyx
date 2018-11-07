@@ -488,6 +488,8 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		cnp.ndarray leftboundary, rightboundary
 		cnp.ndarray leftboundaryscores, rightboundaryscores
 		bint postpruning = True
+		double[:,:] lbsview
+		double[:,:] rbsview
 	# Create matrices to track minima and maxima for binary splits.
 	n = (lensent + 1) * nts + 1
 	midfilter.minleft.resize(n, -1)
@@ -556,6 +558,8 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 				if sentpos >= 3:
 					rightboundaryscores[sentpos-3] = np.min(vec[:, None] + rightboundary,
 							initial=INFINITY, axis=0)
+		lbsview = leftboundaryscores
+		rbsview = rightboundaryscores
 		logging.info("Predicted prioritization in %f seconds"
 					 % (time.perf_counter() - starttime))
 		#
@@ -588,7 +592,7 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 				prevprob = chart._subtreeprob(item)
 
 				if posboundaryprio:
-					est = leftboundaryscores[left, lhs] + rightboundaryscores[right-2, lhs]
+					est = lbsview[left, lhs] + rbsview[right-2, lhs]
 
 				while rule.lhs == lhs:
 					narrowr = midfilter.minright[left * nts + rule.rhs1]
