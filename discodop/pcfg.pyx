@@ -24,6 +24,22 @@ cdef inline uint64_t cellstruct(Idx start, Idx end):
 	return result.dt
 
 
+cpdef inline bint updatebeam(Prob[:] beam, Prob newprob, short size):
+	cdef short i = size
+	while i > 0:
+		if newprob >= beam[i-1]:
+			break
+		elif i < size:
+			beam[i] = beam[i-1]
+			i = i-1
+		else:
+			i = i-1
+	if i < size:
+		beam[i] = newprob
+		return True
+	return False
+
+
 cdef class CFGChart(Chart):
 	"""A Chart for context-free grammars (CFG).
 
@@ -65,9 +81,11 @@ cdef class DenseCFGChart(CFGChart):
 		self.probs.resize(entries, INFINITY)
 		self.parseforest.resize(entries)
 		self.beam = INFINITY
+		self.beamprobs = np.full(self.beamsize, np.inf)
 
 	cdef void flushbeam(self):
 		self.beam = INFINITY
+		self.beamprobs = np.full(self.beamsize, np.inf)
 
 	def root(self):
 		return cellidx(0, self.lensent, self.lensent,
@@ -112,7 +130,9 @@ cdef class DenseCFGChart(CFGChart):
 				return False
 			elif prob + est + beam < self.beam: # buckets[beamitem]:  # shrink beam
 				# self.beambuckets[beamitem] = prob + beam
-				self.beam = prob + beam
+				# self.beam = prob + beam
+				if updatebeam(self.beamprobs, prob + est, self.beamsize):
+					self.beam = self.beamprobs[self.beamsize - 1] + beam
 				self.probs[item] = prob
 			elif prob < self.probs[item]:  # prob falls within beam
 				self.probs[item] = prob
@@ -424,7 +444,7 @@ cdef class SparseCFGChart(CFGChart):
 
 
 def parse(sent, Grammar grammar, tags=None, start=None, whitelist=None,
-		Prob beam_beta=0.0, int beam_delta=50, itemsestimate=None,
+		Prob beam_beta=0.0, int beam_delta=50, short beam_size=1, itemsestimate=None,
 		postagging=None, pruning=None):
 	"""PCFG parsing using CKY.
 
@@ -455,19 +475,19 @@ def parse(sent, Grammar grammar, tags=None, start=None, whitelist=None,
 	if whitelist is None and grammar.nonterminals < 20000:
 		chart = DenseCFGChart(grammar, sent, start)
 		return parse_grammarloop[DenseCFGChart](
-				sent, <DenseCFGChart>chart, tags, beam_beta, beam_delta,
+				sent, <DenseCFGChart>chart, tags, beam_beta, beam_delta, beam_size,
 				postagging, pruning)
 	chart = SparseCFGChart(grammar, sent, start, itemsestimate=itemsestimate)
 	if whitelist is None:
 		return parse_grammarloop[SparseCFGChart](
-				sent, <SparseCFGChart>chart, tags, beam_beta, beam_delta,
+				sent, <SparseCFGChart>chart, tags, beam_beta, beam_delta, beam_size,
 				postagging, pruning)
 	return parse_leftchildloop(
 			sent, chart, tags, whitelist, beam_beta, beam_delta, postagging)
 
 
-cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
-		Prob beam_beta, int beam_delta, postagging, pruning):
+cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
+		Prob beam_beta, int beam_delta, short beam_size, postagging, pruning):
 	"""A CKY parser modeled after Bodenstab's 'fast grammar loop'."""
 	cdef:
 		Grammar grammar = chart.grammar
@@ -527,6 +547,8 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		chart.beambuckets.resize(
 				cellidx(lensent - 1, lensent, lensent, 1) + 1,
 				INFINITY)
+	elif CFGChart_fused is DenseCFGChart:
+		chart.beamsize = beam_size
 	# assign POS tags
 	covered, msg = populatepos[CFGChart_fused](chart, sent, tags,
 			unaryagenda, None, &blocked, &midfilter, NULL, postagging)

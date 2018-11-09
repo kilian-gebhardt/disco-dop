@@ -53,6 +53,8 @@ cdef class CFGChart(Chart):
 	cdef vector[Prob] beambuckets
 	cdef ItemNo getitemidx(self, uint64_t idx)
 	cdef Prob beam
+	cdef Prob[:] beamprobs
+	cdef short beamsize
 
 
 @cython.final
