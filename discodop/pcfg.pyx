@@ -480,16 +480,15 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		vector[bint] openbracket, closebracket
 		vector[Prob] dynamicbeams
 		double est = 0.0
-		bint posboundaryprio = False
 		vector[short] posconversion
 		double[:] vec
-		size_t lcell, rcell
-		double bl, br, lmax, rmax
+		short sstart, sstop, sentpos
 		cnp.ndarray leftboundary, rightboundary
 		cnp.ndarray leftboundaryscores, rightboundaryscores
 		bint postpruning = True
-		double[:,:] lbsview
-		double[:,:] rbsview
+		bint posboundaryprio = True \
+			if pruning and pruning.pruningprm.posboundaryprio \
+			else False
 	# Create matrices to track minima and maxima for binary splits.
 	n = (lensent + 1) * nts + 1
 	midfilter.minleft.resize(n, -1)
@@ -505,7 +504,6 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		openbracket[0] = True
 		closebracket[lensent - 1] = True
 		dynamicbeams = pruning.dynamicbeams
-		posboundaryprio = pruning.pruningprm.posboundaryprio
 		posconversion = pruning.pruningprm.posconversion
 		leftboundary = pruning.pruningprm.leftboundary
 		rightboundary = pruning.pruningprm.rightboundary
@@ -537,29 +535,26 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 				sstart = pruning.pruningprm.postagger.tag_dictionary.item2idx[b'<START>'] \
 					if pruning.pruningprm.posboundaryprio == 'externalpos' \
 					else len(posconversion)
-				leftboundaryscores[sentpos] \
-					= leftboundary[:,sstart]
+				leftboundaryscores[sentpos,:] = leftboundary[:,sstart]
 			elif sentpos == lensent + 1:
 				sstop = pruning.pruningprm.postagger.tag_dictionary.item2idx[b'<STOP>'] \
 					if pruning.pruningprm.posboundaryprio == 'externalpos' \
 					else len(posconversion) + 1
-				rightboundaryscores[sentpos-3] = rightboundary[sstop]
+				rightboundaryscores[sentpos-3,:] = rightboundary[sstop,:]
 			else:
 				if pruning.pruningprm.posboundaryprio == 'externalpos':
 					vec = -np.log(pruning.posprobabilities[sentpos - 1]).astype(np.double)
 				else:
-					lcell = cellidx(sentpos - 1, sentpos, lensent, grammar.nonterminals)
-					vec = np.array([chart._subtreeprob(lcell + ltag) for ltag in posconversion]
+					cell = cellidx(sentpos - 1, sentpos, lensent, grammar.nonterminals)
+					vec = np.array([chart._subtreeprob(cell + ltag) for ltag in posconversion]
 							   + [0.0, 0.0])  # START, END of sentence
 
 				if sentpos < lensent - 1:
 					leftboundaryscores[sentpos] = np.min(vec + leftboundary,
 							initial=INFINITY, axis=1)
 				if sentpos >= 3:
-					rightboundaryscores[sentpos-3] = np.min(vec[:, None] + rightboundary,
-							initial=INFINITY, axis=0)
-		lbsview = leftboundaryscores
-		rbsview = rightboundaryscores
+					rightboundaryscores[sentpos-3] = np.min(vec[:, None]
+							+ rightboundary, initial=INFINITY, axis=0)
 		logging.info("Predicted prioritization in %f seconds"
 					 % (time.perf_counter() - starttime))
 		#
@@ -567,6 +562,10 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		# 	for i in range(4):
 		# 		print("left[%d]" % i, leftboundaryscores[i])
 		# 		print("right[%d]"% (i + 2), rightboundaryscores[i])
+
+	cdef:
+		const double[:,:] lbview = leftboundaryscores if posboundaryprio and lensent > 1 else None
+		const double[:,:] rbview = rightboundaryscores if posboundaryprio and lensent > 1 else None
 
 	for span in range(2, lensent + 1):
 		# constituents from left to right
@@ -592,7 +591,7 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 				prevprob = chart._subtreeprob(item)
 
 				if posboundaryprio:
-					est = lbsview[left, lhs] + rbsview[right-2, lhs]
+					est = lbview[left, lhs] + rbview[right-2, lhs]
 
 				while rule.lhs == lhs:
 					narrowr = midfilter.minright[left * nts + rule.rhs1]
@@ -640,14 +639,14 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 
 			applyunaryrules[CFGChart_fused](chart, left, right, cell, lastidx,
 					unaryagenda, &midfilter, &blocked, None,
-					leftboundaryscores[left] if posboundaryprio else None,
-					rightboundaryscores[right-2] if posboundaryprio else None)
+					lbview[left] if posboundaryprio else None,
+					rbview[right-2] if posboundaryprio else None)
 
 			if postpruning and CFGChart_fused is DenseCFGChart \
 				and beam_beta:
 				pruned += chart.prunecell(cell,
-					leftboundaryscores[left] if posboundaryprio else None,
-					rightboundaryscores[right-2] if posboundaryprio else None,
+					lbview[left] if posboundaryprio else None,
+					rbview[right-2] if posboundaryprio else None,
 					posboundaryprio)
 
 	msg = '%s%s, blocked %s%s' % (
