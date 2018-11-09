@@ -24,8 +24,8 @@ cdef inline uint64_t cellstruct(Idx start, Idx end):
 	return result.dt
 
 
-cpdef inline bint updatebeam(Prob[:] beam, Prob newprob, short size):
-	cdef short i = size
+cpdef inline bint updatebeam(Prob[:] beam, Prob newprob, short size, short start):
+	cdef short i = start
 	while i > 0:
 		if newprob >= beam[i-1]:
 			break
@@ -38,6 +38,20 @@ cpdef inline bint updatebeam(Prob[:] beam, Prob newprob, short size):
 		beam[i] = newprob
 		return True
 	return False
+
+
+cpdef inline short findindex(Prob[:] beam, Prob target, short right):
+	cdef short left = 0, center = right / 2
+	right = right - 1
+	while left <= right:
+		center = left + (right - left) / 2
+		if beam[center] == target:
+			return center
+		elif beam[center] > target:
+			right = center - 1
+		else:
+			left = center + 1
+	return center
 
 
 cdef class CFGChart(Chart):
@@ -81,6 +95,7 @@ cdef class DenseCFGChart(CFGChart):
 		self.probs.resize(entries, INFINITY)
 		self.parseforest.resize(entries)
 		self.beam = INFINITY
+		self.beamsize = 15
 		self.beamprobs = np.full(self.beamsize, np.inf)
 
 	cdef void flushbeam(self):
@@ -126,16 +141,31 @@ cdef class DenseCFGChart(CFGChart):
 		if beam:
 			itemx = item - item % self.grammar.nonterminals
 			beamitem = itemx // self.grammar.nonterminals
-			if prob + est > self.beam: # buckets[beamitem]:  # prob falls outside of beam
+
+			if not newitem and prob < self.probs[item] and prob + est < self.beam:
+					self.probs[item] = prob
+					startidx = findindex(self.beamprobs, self.probs[item] + est, self.beamsize) + 1
+					if self.beamsize and updatebeam(self.beamprobs, prob + est, self.beamsize, startidx) \
+						and startidx <= self.beamsize:
+						self.beam = self.beamprobs[self.beamsize - 1]
+			elif newitem and prob + est < self.beam:
+				if updatebeam(self.beamprobs, prob + est, self.beamsize, self.beamsize):
+					self.beam = self.beamprobs[self.beamsize - 1]
+					self.probs[item] = prob
+			else:
 				return False
-			elif prob + est + beam < self.beam: # buckets[beamitem]:  # shrink beam
-				# self.beambuckets[beamitem] = prob + beam
-				# self.beam = prob + beam
-				if updatebeam(self.beamprobs, prob + est, self.beamsize):
-					self.beam = self.beamprobs[self.beamsize - 1] + beam
-				self.probs[item] = prob
-			elif prob < self.probs[item]:  # prob falls within beam
-				self.probs[item] = prob
+
+			if False:
+				if prob + est > self.beam: # buckets[beamitem]:  # prob falls outside of beam
+					return False
+				elif prob + est + beam < self.beam: # buckets[beamitem]:  # shrink beam
+					# self.beambuckets[beamitem] = prob + beam
+					# self.beam = prob + beam
+					if updatebeam(self.beamprobs, prob + est + beam, self.beamsize):
+						self.beam = self.beamprobs[self.beamsize - 1]
+						self.probs[item] = prob
+				elif prob < self.probs[item]:  # prob falls within beam
+					self.probs[item] = prob
 		elif prob < self.probs[item]:
 			self.probs[item] = prob
 		# can infer order of binary rules, but need to track unaries explicitly
