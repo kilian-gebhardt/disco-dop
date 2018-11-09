@@ -437,6 +437,9 @@ def startexp(
 						+ prm.pruningprm.posboundaryunismooth
 							/(len(prm.pruningprm.posconversion) + 2))
 
+	if prm.pruningprm:
+		prm.pruningprm.postpruning = prm.postpruning
+
 	evalparam = evalmod.readparam(prm.evalparam)
 	evalparam['DEBUG'] = -1
 	evalparam['CUTOFF_LEN'] = 40

@@ -89,6 +89,7 @@ DEFAULTS = dict(
 		abortafterpruningtraining=False,
 		resumepruningtraining=False,
 		posboundarysmoothing=1.0e-3,
+		postpruning=True,
 		)
 
 DEFAULTSTAGE = dict(
