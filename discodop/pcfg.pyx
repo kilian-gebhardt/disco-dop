@@ -64,13 +64,18 @@ cdef class DenseCFGChart(CFGChart):
 		# NB: resize not reserve; will not resize again.
 		self.probs.resize(entries, INFINITY)
 		self.parseforest.resize(entries)
+		self.beam = INFINITY
+
+	cdef void flushbeam(self):
+		self.beam = INFINITY
 
 	def root(self):
 		return cellidx(0, self.lensent, self.lensent,
 			self.grammar.nonterminals) + self.start
 
 	cpdef Prob getbeambucket(self, size_t cell):
-		return self.beambuckets[cell]
+		return self.beam
+		#return self.beambuckets[cell]
 
 	def bestsubtree(self, start, end, skipsplit=True):
 		cdef Prob bestprob = INFINITY, prob
@@ -103,10 +108,11 @@ cdef class DenseCFGChart(CFGChart):
 		if beam:
 			itemx = item - item % self.grammar.nonterminals
 			beamitem = itemx // self.grammar.nonterminals
-			if prob + est > self.beambuckets[beamitem]:  # prob falls outside of beam
+			if prob + est > self.beam: # buckets[beamitem]:  # prob falls outside of beam
 				return False
-			elif prob + est + beam < self.beambuckets[beamitem]:  # shrink beam
-				self.beambuckets[beamitem] = prob + beam
+			elif prob + est + beam < self.beam: # buckets[beamitem]:  # shrink beam
+				# self.beambuckets[beamitem] = prob + beam
+				self.beam = prob + beam
 				self.probs[item] = prob
 			elif prob < self.probs[item]:  # prob falls within beam
 				self.probs[item] = prob
@@ -131,7 +137,7 @@ cdef class DenseCFGChart(CFGChart):
 			if useest:
 				est = left[nont] + right[nont]
 			if (isfinite(self.probs[item])
-					and self.probs[item] + est > self.beambuckets[beamitem]):
+					and self.probs[item] + est > self.beam): # buckets[beamitem]):
 				self.probs[item] = INFINITY
 				# self.parseforest[item].clear()
 				pruning_counter += 1
@@ -517,7 +523,7 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		closebracket = [True for _ in range(lensent)]
 		dynamicbeams = []
 
-	if beam_beta:
+	if beam_beta and CFGChart_fused is SparseCFGChart:
 		chart.beambuckets.resize(
 				cellidx(lensent - 1, lensent, lensent, 1) + 1,
 				INFINITY)
@@ -580,6 +586,7 @@ cdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 				if beam_beta == float('-Inf'): continue
 			if CFGChart_fused is DenseCFGChart:
 				cell = cellidx(left, right, lensent, nts)
+				chart.flushbeam()
 			elif CFGChart_fused is SparseCFGChart:
 				cell = cellstruct(left, right)
 			lastidx = chart.items.size()

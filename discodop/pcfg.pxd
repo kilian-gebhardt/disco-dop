@@ -52,6 +52,7 @@ cdef class CFGChart(Chart):
 	cdef vector[uint64_t] items
 	cdef vector[Prob] beambuckets
 	cdef ItemNo getitemidx(self, uint64_t idx)
+	cdef Prob beam
 
 
 @cython.final
@@ -63,6 +64,7 @@ cdef class DenseCFGChart(CFGChart):
 	cpdef Prob getbeambucket(self, size_t cell)
 	cdef bint _hasitem(self, uint64_t item)
 	cdef int prunecell(self, uint64_t cell, Prob[:], Prob[:], bint)
+	cdef void flushbeam(self)
 
 
 @cython.final
