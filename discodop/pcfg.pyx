@@ -95,12 +95,12 @@ cdef class DenseCFGChart(CFGChart):
 		self.probs.resize(entries, INFINITY)
 		self.parseforest.resize(entries)
 		self.beam = INFINITY
-		self.beamsize = 15
-		self.beamprobs = np.full(self.beamsize, np.inf)
+		self.beamsize = 0
+		self.beamprobs = np.full(self.beamsize, np.inf, dtype='d')
 
 	cdef void flushbeam(self):
 		self.beam = INFINITY
-		self.beamprobs = np.full(self.beamsize, np.inf)
+		self.beamprobs = np.full(self.beamsize, np.inf, dtype='d')
 
 	def root(self):
 		return cellidx(0, self.lensent, self.lensent,
@@ -136,36 +136,36 @@ cdef class DenseCFGChart(CFGChart):
 		"""Update probability for item if better than current one.
 
 		Add item if not seen before; return False if pruned."""
-		cdef uint64_t beamitem, itemx
 		cdef bint newitem = self.probs[item] == INFINITY
-		if beam:
-			itemx = item - item % self.grammar.nonterminals
-			beamitem = itemx // self.grammar.nonterminals
 
-			if not newitem and prob < self.probs[item] and prob + est < self.beam:
-					self.probs[item] = prob
-					startidx = findindex(self.beamprobs, self.probs[item] + est, self.beamsize) + 1
-					if self.beamsize and updatebeam(self.beamprobs, prob + est, self.beamsize, startidx) \
-						and startidx <= self.beamsize:
-						self.beam = self.beamprobs[self.beamsize - 1]
-			elif newitem and prob + est < self.beam:
-				if updatebeam(self.beamprobs, prob + est, self.beamsize, self.beamsize):
-					self.beam = self.beamprobs[self.beamsize - 1]
-					self.probs[item] = prob
-			else:
-				return False
-
-			if False:
-				if prob + est > self.beam: # buckets[beamitem]:  # prob falls outside of beam
+		if beam or self.beamsize:
+			if beam and not self.beamsize:  # use beam thresholding
+				if prob + est > self.beam:  # prob falls outside of beam
 					return False
-				elif prob + est + beam < self.beam: # buckets[beamitem]:  # shrink beam
-					# self.beambuckets[beamitem] = prob + beam
-					# self.beam = prob + beam
-					if updatebeam(self.beamprobs, prob + est + beam, self.beamsize):
-						self.beam = self.beamprobs[self.beamsize - 1]
-						self.probs[item] = prob
+				elif prob + est + beam < self.beam:  # shrink beam
+					self.beam = prob + est + beam
+					self.probs[item] = prob
 				elif prob < self.probs[item]:  # prob falls within beam
 					self.probs[item] = prob
+			else:
+				if not newitem and prob < self.probs[item] and prob + est < self.beam:
+					self.probs[item] = prob
+					startidx = findindex(self.beamprobs, self.probs[item] + est, self.beamsize) + 1
+					if startidx <= self.beamsize and \
+						updatebeam(self.beamprobs, prob + est, self.beamsize, startidx):
+						if beam:
+							self.beam = self.beamprobs[0] + beam
+						else:
+							self.beam = self.beamprobs[self.beamsize - 1]
+				elif newitem and prob + est < self.beam:
+					if updatebeam(self.beamprobs, prob + est, self.beamsize, self.beamsize):
+						self.probs[item] = prob
+						if beam:
+							self.beam = self.beamprobs[0] + beam
+						else:
+							self.beam = self.beamprobs[self.beamsize - 1]
+				else:
+					return False
 		elif prob < self.probs[item]:
 			self.probs[item] = prob
 		# can infer order of binary rules, but need to track unaries explicitly
@@ -474,8 +474,8 @@ cdef class SparseCFGChart(CFGChart):
 
 
 def parse(sent, Grammar grammar, tags=None, start=None, whitelist=None,
-		Prob beam_beta=0.0, int beam_delta=50, short beam_size=1, edp=2.0e-3, itemsestimate=None,
-		postagging=None, pruning=None):
+		Prob beam_beta=0.0, int beam_delta=50, short beam_size=1, edp=2.0e-3, short min_beam=1,
+		  itemsestimate=None, postagging=None, pruning=None):
 	"""PCFG parsing using CKY.
 
 	:param sent: A sequence of tokens that will be parsed.
@@ -505,17 +505,17 @@ def parse(sent, Grammar grammar, tags=None, start=None, whitelist=None,
 	if whitelist is None and grammar.nonterminals < 20000:
 		chart = DenseCFGChart(grammar, sent, start)
 		return parse_grammarloop[DenseCFGChart](
-				sent, <DenseCFGChart>chart, tags, beam_beta, beam_delta, beam_size, edp, postagging, pruning)
+				sent, <DenseCFGChart>chart, tags, beam_beta, beam_delta, beam_size, edp, min_beam, postagging, pruning)
 	chart = SparseCFGChart(grammar, sent, start, itemsestimate=itemsestimate)
 	if whitelist is None:
 		return parse_grammarloop[SparseCFGChart](
-				sent, <SparseCFGChart>chart, tags, beam_beta, beam_delta, beam_size, edp, postagging, pruning)
+				sent, <SparseCFGChart>chart, tags, beam_beta, beam_delta, beam_size, edp, min_beam, postagging, pruning)
 	return parse_leftchildloop(
 			sent, chart, tags, whitelist, beam_beta, beam_delta, postagging)
 
 
 cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
-		Prob beam_beta, int beam_delta, short beam_size, double edp, postagging, pruning):
+		Prob beam_beta, int beam_delta, short beam_size, double edp, short min_beam, postagging, pruning):
 	"""A CKY parser modeled after Bodenstab's 'fast grammar loop'."""
 	cdef:
 		Grammar grammar = chart.grammar
@@ -575,8 +575,7 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		chart.beambuckets.resize(
 				cellidx(lensent - 1, lensent, lensent, 1) + 1,
 				INFINITY)
-	elif CFGChart_fused is DenseCFGChart:
-		chart.beamsize = beam_size
+
 	# assign POS tags
 	covered, msg = populatepos[CFGChart_fused](chart, sent, tags,
 			unaryagenda, None, &blocked, &midfilter, NULL, postagging)
@@ -623,11 +622,17 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		const double[:,:] lbview = leftboundaryscores if posboundaryprio and lensent > 1 else None
 		const double[:,:] rbview = rightboundaryscores if posboundaryprio and lensent > 1 else None
 
+	if CFGChart_fused is DenseCFGChart:
+		if beam_size < min_beam:
+			min_beam = beam_size
+		chart.beamsize = beam_size
+		chart.flushbeam()
+
 	for span in range(2, lensent + 1):
 		# constituents from left to right
 		if CFGChart_fused is DenseCFGChart and edp:
 			chart.beamsize \
-				= max(1, int(beam_size * exp(-edp * (span-1) * lensent)))
+				= max(min_beam, int(min_beam + (beam_size - min_beam) * exp(-edp * (span-1) * lensent)))
 		for left in range(lensent - span + 1):
 			if not openbracket[left]:
 				continue
@@ -703,7 +708,7 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 					rbview[right-2] if posboundaryprio else None)
 
 			if postpruning and CFGChart_fused is DenseCFGChart \
-				and beam_beta:
+				and (beam_beta or beam_size):
 				pruned += chart.prunecell(cell,
 					lbview[left] if posboundaryprio else None,
 					rbview[right-2] if posboundaryprio else None,
@@ -711,7 +716,7 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 
 	msg = '%s%s, blocked %s%s' % (
 			'' if chart else 'no parse; ', chart.stats(), blocked,
-			', pruned %s' % pruned if beam_beta else '')
+			', pruned %s' % pruned if (beam_beta or beam_size) else '')
 	return chart, msg
 
 
