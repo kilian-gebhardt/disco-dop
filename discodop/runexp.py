@@ -537,7 +537,7 @@ def dobinarization(trees, sents, binarization, relationalrealizational,
 		logging.info('treebank fan-out before binarization: %d #%d\n%s\n%s',
 				tbfanout, n, trees[n], ' '.join(sents[n]))
 	# binarization
-	begin = time.clock()
+	begin = time.perf_counter()
 	msg = 'binarization: %s' % binarization.method
 	if binarization.fanout_marks_before_bin:
 		trees = [treetransforms.addfanoutmarkers(t) for t in trees]
@@ -560,7 +560,7 @@ def dobinarization(trees, sents, binarization, relationalrealizational,
 			logging.info(msg1)
 	trees = [treetransforms.addfanoutmarkers(t) for t in trees]
 	if logmsg:
-		logging.info('%s; cpu time elapsed: %gs', msg, time.clock() - begin)
+		logging.info('%s; cpu time elapsed: %gs', msg, time.perf_counter() - begin)
 	return trees
 
 
@@ -763,7 +763,7 @@ def getgrammars(trees, sents, stages, testmaxwords, resultdir,
 				raise ValueError('SX estimate requires PCFG.')
 			elif stage.mode != 'plcfrs':
 				raise ValueError('estimates require parser w/agenda.')
-			begin = time.clock()
+			begin = time.perf_counter()
 			logging.info('computing %s estimates', stage.estimates)
 			if stage.estimates == 'SX':
 				outside = estimates.getpcfgestimates(
@@ -772,7 +772,7 @@ def getgrammars(trees, sents, stages, testmaxwords, resultdir,
 				outside = estimates.getestimates(
 						gram, testmaxwords, trees[0].label)
 			logging.info('estimates done. cpu time elapsed: %gs',
-					time.clock() - begin)
+					time.perf_counter() - begin)
 			np.savez_compressed('%s/%s.outside.npz' % (
 					resultdir, stage.name), outside=outside)
 			logging.info('saved %s estimates', stage.estimates)
