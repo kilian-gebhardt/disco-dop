@@ -122,6 +122,7 @@ DEFAULTSTAGE = dict(
 		beam_beta=1.0,  # beam pruning factor, between 0 and 1; 1 to disable.
 		beam_delta=40,  # maximum span length to which beam_beta is applied
 		beam_size=1,
+		edp=2.0e-3,  # exponential decay pruning (shrinks beam for longer spans)
 		# deprecated options
 		kbest=True, sample=False, binarized=True,
 		iterate=False, complement=False,
@@ -371,6 +372,7 @@ class Parser(object):
 							beam_beta=-log(stage.beam_beta),
 							beam_delta=stage.beam_delta,
 							beam_size=stage.beam_size,
+							edp=stage.edp,
 							itemsestimate=estimateitems(
 								sent, stage.prune, stage.mode, stage.dop),
 							postagging=self.postagging,
