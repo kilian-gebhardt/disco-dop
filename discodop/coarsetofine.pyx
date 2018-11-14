@@ -36,8 +36,8 @@ def prunechart(Chart coarsechart, Grammar fine, k,
 		set require=None, set block=None):
 	"""Produce a white list of selected chart items.
 
-	The criterion is that they occur in the `k`-best derivations of ``chart``,
-	or with posterior probability > `k`. Labels ``X`` in ``coarse.toid`` are
+	The criterion is that they occur in the `k`-best derivations of ``coarsechart``,
+	or with posterior probability > `k`. Labels ``X`` in ``coarsechart.toid`` are
 	projected to the labels in the mapping of the fine grammar, e.g., to ``X``
 	and ``X@n-m`` for a DOP reduction.
 
