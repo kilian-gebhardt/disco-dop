@@ -474,7 +474,8 @@ cdef class SparseCFGChart(CFGChart):
 
 
 def parse(sent, Grammar grammar, tags=None, start=None, whitelist=None,
-		Prob beam_beta=0.0, int beam_delta=50, short beam_size=1, edp=2.0e-3, short min_beam=1,
+		Prob beam_beta=0.0, int beam_delta=50, short beam_size=1, edp=2.0e-3,
+		  short min_beam=1, bint postpruning=True, prune_unary=False,
 		  itemsestimate=None, postagging=None, pruning=None):
 	"""PCFG parsing using CKY.
 
@@ -495,6 +496,12 @@ def parse(sent, Grammar grammar, tags=None, start=None, whitelist=None,
 	:param beam_beta: keep track of the best score in each cell and only allow
 		items which are within a multiple of ``beam_beta`` of the best score.
 		Should be a negative log probability. Pass ``0.0`` to disable.
+	:param beam_size: maximum number items per cell. Pass ``0`` to disable.
+	:param edp: exponential decay pruning. Gradually reduce the beam_size for
+		cells with longer span. Pass ``0.0``to disable.
+	:param min_beam: minimum beam size if edp is used.
+	:param postpruning: Remove items that fall outside the beam once entire cell was processed.
+	:param prune_unary: Apply pruning to unary rules.
 	:param beam_delta: the maximum span length to which beam search is applied.
 	:param itemsestimate: the number of chart items to pre-allocate.
 	"""
@@ -505,17 +512,60 @@ def parse(sent, Grammar grammar, tags=None, start=None, whitelist=None,
 	if whitelist is None and grammar.nonterminals < 20000:
 		chart = DenseCFGChart(grammar, sent, start)
 		return parse_grammarloop[DenseCFGChart](
-				sent, <DenseCFGChart>chart, tags, beam_beta, beam_delta, beam_size, edp, min_beam, postagging, pruning)
+				sent, <DenseCFGChart>chart, tags, beam_beta, beam_delta,
+				beam_size, edp, min_beam, postpruning, prune_unary, postagging,
+				pruning)
 	chart = SparseCFGChart(grammar, sent, start, itemsestimate=itemsestimate)
 	if whitelist is None:
 		return parse_grammarloop[SparseCFGChart](
-				sent, <SparseCFGChart>chart, tags, beam_beta, beam_delta, beam_size, edp, min_beam, postagging, pruning)
+				sent, <SparseCFGChart>chart, tags, beam_beta, beam_delta,
+				beam_size, edp, min_beam, postpruning, prune_unary, postagging,
+			pruning)
 	return parse_leftchildloop(
 			sent, chart, tags, whitelist, beam_beta, beam_delta, postagging)
 
 
+
+cpdef void initialize_pos_boundary_prioritization(short lensent, uint32_t nts, cnp.ndarray leftboundaryscores, cnp.ndarray rightboundaryscores, CFGChart_fused chart, pruning):
+	cdef:
+		short sstart, sstop, sentpos
+		vector[short] posconversion = pruning.pruningprm.posconversion
+		cnp.ndarray leftboundary = pruning.pruningprm.leftboundary
+		cnp.ndarray rightboundary = pruning.pruningprm.rightboundary
+		double[:] vec
+
+	starttime = time.perf_counter()
+	for sentpos in range(0, lensent+2):
+
+		if sentpos == 0:
+			sstart = pruning.pruningprm.postagger.tag_dictionary.item2idx[b'<START>'] \
+				if pruning.pruningprm.posboundaryprio == 'externalpos' \
+				else posconversion.size()
+			leftboundaryscores[sentpos,:] = leftboundary[:,sstart]
+		elif sentpos == lensent + 1:
+			sstop = pruning.pruningprm.postagger.tag_dictionary.item2idx[b'<STOP>'] \
+				if pruning.pruningprm.posboundaryprio == 'externalpos' \
+				else posconversion.size() + 1
+			rightboundaryscores[sentpos-2,:] = rightboundary[sstop,:]
+		else:
+			if pruning.pruningprm.posboundaryprio == 'externalpos':
+				vec = -np.log(pruning.posprobabilities[sentpos - 1]).astype(np.double)
+			else:
+				cell = cellidx(sentpos - 1, sentpos, lensent, nts)
+				vec = np.array([chart._subtreeprob(cell + ltag) for ltag in posconversion]
+						   + [0.0, 0.0])  # START, END of sentence
+
+			if sentpos < lensent:
+				leftboundaryscores[sentpos] = np.min(vec + leftboundary,
+						initial=INFINITY, axis=1)
+			if sentpos >= 2:
+				rightboundaryscores[sentpos-2] = np.min(vec[:, None]
+						+ rightboundary, initial=INFINITY, axis=0)
+
+	logging.info("Predicted prioritization in %f seconds"
 cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
-		Prob beam_beta, int beam_delta, short beam_size, double edp, short min_beam, postagging, pruning):
+		Prob beam_beta, int beam_delta, short beam_size, double edp,
+		short min_beam, bint postpruning, bint prune_unary, postagging, pruning):
 	"""A CKY parser modeled after Bodenstab's 'fast grammar loop'."""
 	cdef:
 		Grammar grammar = chart.grammar
@@ -534,15 +584,10 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		vector[bint] openbracket, closebracket
 		vector[Prob] dynamicbeams
 		double est = 0.0
-		vector[short] posconversion
-		double[:] vec
-		short sstart, sstop, sentpos
-		cnp.ndarray leftboundary, rightboundary
-		cnp.ndarray leftboundaryscores, rightboundaryscores
-		bint postpruning = True
 		bint posboundaryprio = True \
 			if pruning and pruning.pruningprm.posboundaryprio \
 			else False
+		cnp.ndarray leftboundaryscores, rightboundaryscores
 	# Create matrices to track minima and maxima for binary splits.
 	n = (lensent + 1) * nts + 1
 	midfilter.minleft.resize(n, -1)
@@ -558,13 +603,10 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		openbracket[0] = True
 		closebracket[lensent - 1] = True
 		dynamicbeams = pruning.dynamicbeams
-		posconversion = pruning.pruningprm.posconversion
-		leftboundary = pruning.pruningprm.leftboundary
-		rightboundary = pruning.pruningprm.rightboundary
+
 		if posboundaryprio:
-			leftboundaryscores = np.empty((lensent - 1, grammar.nonterminals), dtype='d')
-			rightboundaryscores = np.empty((lensent - 1, grammar.nonterminals), dtype='d')
-		postpruning = pruning.pruningprm.postpruning
+			leftboundaryscores = np.empty((lensent, nts), dtype='d')
+			rightboundaryscores = np.empty((lensent, nts), dtype='d')
 
 	else:
 		openbracket = [True for _ in range(lensent)]
@@ -576,51 +618,36 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 				cellidx(lensent - 1, lensent, lensent, 1) + 1,
 				INFINITY)
 
+	if CFGChart_fused is DenseCFGChart and prune_unary:
+		chart.beamsize = beam_size
+		chart.flushbeam()
+
+
+	cdef:
+		const Prob[:,:] lbview = leftboundaryscores \
+			if posboundaryprio else None
+		const Prob[:,:] rbview = rightboundaryscores \
+			if posboundaryprio else None
+
+
+	# compute POS boundary prioritization using external POS
+	if posboundaryprio and pruning.pruningprm.posboundaryprio == 'externalpos':
+		# use internal pos
+		initialize_pos_boundary_prioritization(lensent, nts, leftboundaryscores,
+				rightboundaryscores, chart, pruning)
+
 	# assign POS tags
-	covered, msg = populatepos[CFGChart_fused](chart, sent, tags,
-			unaryagenda, None, &blocked, &midfilter, NULL, postagging)
+	covered, msg = populatepos[CFGChart_fused](chart, sent, tags, unaryagenda,
+			None, beam_beta if prune_unary else 0.0, beam_delta,
+			lbview, rbview, &blocked, &midfilter, NULL, postagging)
+
 	if not covered:
 		return chart, msg
 
-	if posboundaryprio and lensent > 1:
-		starttime = time.perf_counter()
-		for sentpos in range(0, lensent+2):
-
-			if sentpos == 0:
-				sstart = pruning.pruningprm.postagger.tag_dictionary.item2idx[b'<START>'] \
-					if pruning.pruningprm.posboundaryprio == 'externalpos' \
-					else len(posconversion)
-				leftboundaryscores[sentpos,:] = leftboundary[:,sstart]
-			elif sentpos == lensent + 1:
-				sstop = pruning.pruningprm.postagger.tag_dictionary.item2idx[b'<STOP>'] \
-					if pruning.pruningprm.posboundaryprio == 'externalpos' \
-					else len(posconversion) + 1
-				rightboundaryscores[sentpos-3,:] = rightboundary[sstop,:]
-			else:
-				if pruning.pruningprm.posboundaryprio == 'externalpos':
-					vec = -np.log(pruning.posprobabilities[sentpos - 1]).astype(np.double)
-				else:
-					cell = cellidx(sentpos - 1, sentpos, lensent, grammar.nonterminals)
-					vec = np.array([chart._subtreeprob(cell + ltag) for ltag in posconversion]
-							   + [0.0, 0.0])  # START, END of sentence
-
-				if sentpos < lensent - 1:
-					leftboundaryscores[sentpos] = np.min(vec + leftboundary,
-							initial=INFINITY, axis=1)
-				if sentpos >= 3:
-					rightboundaryscores[sentpos-3] = np.min(vec[:, None]
-							+ rightboundary, initial=INFINITY, axis=0)
-		logging.info("Predicted prioritization in %f seconds"
-					 % (time.perf_counter() - starttime))
-		#
-		# if lensent > 5:
-		# 	for i in range(4):
-		# 		print("left[%d]" % i, leftboundaryscores[i])
-		# 		print("right[%d]"% (i + 2), rightboundaryscores[i])
-
-	cdef:
-		const double[:,:] lbview = leftboundaryscores if posboundaryprio and lensent > 1 else None
-		const double[:,:] rbview = rightboundaryscores if posboundaryprio and lensent > 1 else None
+	# compute POS boundary prioritization using internal POS
+	if posboundaryprio and pruning.pruningprm.posboundaryprio != 'externalpos':
+		initialize_pos_boundary_prioritization(lensent, nts, leftboundaryscores,
+			rightboundaryscores, chart, pruning)
 
 	if CFGChart_fused is DenseCFGChart:
 		if beam_size < min_beam:
@@ -631,8 +658,8 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 	for span in range(2, lensent + 1):
 		# constituents from left to right
 		if CFGChart_fused is DenseCFGChart and edp:
-			chart.beamsize \
-				= max(min_beam, int(min_beam + (beam_size - min_beam) * exp(-edp * (span-1) * lensent)))
+			chart.beamsize = max(min_beam, int(min_beam
+					+ (beam_size - min_beam) * exp(-edp * (span-1) * lensent)))
 		for left in range(lensent - span + 1):
 			if not openbracket[left]:
 				continue
@@ -649,14 +676,14 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 				cell = cellstruct(left, right)
 			lastidx = chart.items.size()
 			# apply all binary rules
-			for lhs in range(1, grammar.nonterminals):
+			for lhs in range(1, nts):
 				n = 0
 				rule = &(grammar.bylhs[lhs][n])
 				item = lhs + cell
 				prevprob = chart._subtreeprob(item)
 
 				if posboundaryprio:
-					est = lbview[left, lhs] + rbview[right-2, lhs]
+					est = lbview[left, lhs] + rbview[right-1, lhs]
 
 				while rule.lhs == lhs:
 					narrowr = midfilter.minright[left * nts + rule.rhs1]
@@ -702,16 +729,25 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 				if isinf(prevprob) and isfinite(chart._subtreeprob(item)):
 					updatemidfilter(midfilter, left, right, lhs, nts)
 
+			if not prune_unary:
+				if postpruning and CFGChart_fused is DenseCFGChart \
+				and (beam_beta or beam_size):
+					pruned += chart.prunecell(cell,
+						lbview[left] if posboundaryprio else None,
+						rbview[right-1] if posboundaryprio else None,
+						posboundaryprio)
+				chart.beamsize = 0
 			applyunaryrules[CFGChart_fused](chart, left, right, cell, lastidx,
 					unaryagenda, &midfilter, &blocked, None,
+					beam_beta if prune_unary else 0.0, beam_delta,
 					lbview[left] if posboundaryprio else None,
-					rbview[right-2] if posboundaryprio else None)
+					rbview[right-1] if posboundaryprio else None)
 
-			if postpruning and CFGChart_fused is DenseCFGChart \
+			if prune_unary and postpruning and CFGChart_fused is DenseCFGChart \
 				and (beam_beta or beam_size):
 				pruned += chart.prunecell(cell,
 					lbview[left] if posboundaryprio else None,
-					rbview[right-2] if posboundaryprio else None,
+					rbview[right-1] if posboundaryprio else None,
 					posboundaryprio)
 
 	msg = '%s%s, blocked %s%s' % (
@@ -738,13 +774,14 @@ cdef parse_leftchildloop(sent, SparseCFGChart chart, tags,
 		CFGItem li
 		bint usemask = grammar.mask.size() != 0
 		Prob[:] dummy = None
+		Prob[:,:] dummy2 = None
 	cellindex.resize(cellidx(lensent - 1, lensent, lensent, 1) + 2, 0)
 	if beam_beta:
 		chart.beambuckets.resize(
 				cellidx(lensent - 1, lensent, lensent, 1) + 1, INFINITY)
 	# assign POS tags
-	covered, msg = populatepos(chart, sent, tags, unaryagenda, whitelist,
-			&blocked, NULL, &cellindex, postagging)
+	covered, msg = populatepos(chart, sent, tags, unaryagenda, whitelist, 0.0,
+			0, dummy2, dummy2, &blocked, NULL, &cellindex, postagging)
 	if not covered:
 		return chart, msg
 
@@ -792,7 +829,7 @@ cdef parse_leftchildloop(sent, SparseCFGChart chart, tags,
 					li.dt = leftitem
 
 			applyunaryrules(chart, left, right, cell, lastidx, unaryagenda,
-					NULL, &blocked, whitelist, dummy, dummy)
+					NULL, &blocked, whitelist, 0.0, 0, dummy, dummy)
 			cellindex[ccell + 1] = chart.items.size()
 	msg = '%s%s, blocked %s' % (
 			'' if chart else 'no parse; ', chart.stats(), blocked)
@@ -801,6 +838,8 @@ cdef parse_leftchildloop(sent, SparseCFGChart chart, tags,
 
 cdef populatepos(CFGChart_fused chart, sent, tags,
 		Agenda[Label, Prob]& unaryagenda, Whitelist whitelist,
+		Prob beam_beta, int beam_delta,
+		const Prob[:,:] leftboundary, const Prob[:,:] rightboundary,
 		uint64_t *blocked, MidFilter *midfilter, vector[size_t] *cellindex,
 		object postagging):
 	"""Apply all possible lexical and unary rules on each lexical span.
@@ -819,7 +858,13 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 		uint32_t n
 		short left, right, lensent = len(sent)
 		Prob openclassfactor = 0.001
+		short beam_size = chart.beamsize \
+				if CFGChart_fused is DenseCFGChart else 0
 	for left, word in enumerate(sent):
+
+		if CFGChart_fused is DenseCFGChart:
+			chart.beamsize = 0
+
 		tag = tags[left] if tags and tags[left] else None
 		# if we are given gold tags, make sure we only allow matching
 		# tags - after removing addresses introduced by the DOP reduction
@@ -919,19 +964,26 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 						'but tag %r not in grammar' % tag)
 			return False, 'no parse: all tags for word %r blocked' % word
 
+		if CFGChart_fused is DenseCFGChart and beam_size:
+			chart.beamsize = beam_size
+			chart.flushbeam()
+
 		# unary rules on the span of this POS tag
 		applyunaryrules[CFGChart_fused](chart, left, right, cell, lastidx,
-				unaryagenda, midfilter, blocked, whitelist, None, None)
+				unaryagenda, midfilter, blocked, whitelist, beam_beta,
+				beam_delta,
+				leftboundary[left] if leftboundary is not None else None,
+				rightboundary[right - 1] if rightboundary is not None else None)
 	if cellindex is not NULL:
 		cellindex[0][ccell + 1] = chart.items.size()
 	return True, ''
 
 
 cdef inline void applyunaryrules(
-		CFGChart_fused chart, short left, short right, uint64_t cell,
+		CFGChart_fused chart, const short left, const short right, uint64_t cell,
 		ItemNo lastidx, Agenda[Label, Prob]& unaryagenda, MidFilter *midfilter,
-		uint64_t *blocked, Whitelist whitelist, Prob[:] leftboundary,
-		Prob[:] rightboundary):
+		uint64_t *blocked, Whitelist whitelist, Prob beam_beta, int beam_delta,
+		Prob[:] leftboundary, Prob[:] rightboundary):
 	"""Apply unary rules in a given cell."""
 	cdef:
 		Grammar grammar = chart.grammar
@@ -943,6 +995,7 @@ cdef inline void applyunaryrules(
 		size_t nts = grammar.nonterminals
 		bint usemask = grammar.mask.size() != 0
 		double est = 0.0
+		bint add = False
 		# pair[Label, Prob] unaryentry
 		# vector[pair[Label, Prob]] unaryentries
 	# collect possible rhs items for unaries
@@ -978,19 +1031,24 @@ cdef inline void applyunaryrules(
 						whitelist.mapping[lhs]) == 0):
 				continue
 			item = cell + lhs
+			add = False
 			if rule.prob + prob < chart._subtreeprob(item):
-
 				if CFGChart_fused is SparseCFGChart and \
-					chart.updateprob(item, rule.prob + prob, 0.0):
+					chart.updateprob(item, rule.prob + prob,
+						beam_beta if right - left <= beam_delta else 0.0):
 					unaryagenda.setifbetter(lhs, rule.prob + prob)
+					add = True
 				elif CFGChart_fused is DenseCFGChart and \
-					chart.updateprob(item, rule.prob + prob, 0.0, est):
+					chart.updateprob(item, rule.prob + prob,
+						beam_beta if right - left <= beam_delta else 0.0, est):
 					unaryagenda.setifbetter(lhs, rule.prob + prob)
+					add = True
 				else:
 					blocked += 1
-			chart.addedge(item, right, rule)
-			if midfilter is not NULL:
-				updatemidfilter(midfilter[0], left, right, lhs, nts)
+			if not (beam_beta and right - left <= beam_delta) or add:
+				chart.addedge(item, right, rule)
+				if midfilter is not NULL:
+					updatemidfilter(midfilter[0], left, right, lhs, nts)
 
 
 cdef inline void updatemidfilter(

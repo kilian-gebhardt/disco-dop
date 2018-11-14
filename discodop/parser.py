@@ -89,7 +89,6 @@ DEFAULTS = dict(
 		abortafterpruningtraining=False,
 		resumepruningtraining=False,
 		posboundarysmoothing=1.0e-3,
-		postpruning=True,
 		)
 
 DEFAULTSTAGE = dict(
@@ -124,6 +123,8 @@ DEFAULTSTAGE = dict(
 		beam_size=1,
 		edp=2.0e-3,  # exponential decay pruning (shrinks beam for longer spans)
 		min_beam=1,  # minimum beam if exponential decay pruning is used
+		postpruning=True,
+		prune_unary=False,
 		# deprecated options
 		kbest=True, sample=False, binarized=True,
 		iterate=False, complement=False,
@@ -375,6 +376,8 @@ class Parser(object):
 							beam_size=stage.beam_size,
 							edp=stage.edp,
 							min_beam=stage.min_beam,
+							postpruning=stage.postpruning,
+							prune_unary=stage.prune_unary,
 							itemsestimate=estimateitems(
 								sent, stage.prune, stage.mode, stage.dop),
 							postagging=self.postagging,
