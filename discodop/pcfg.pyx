@@ -563,6 +563,7 @@ cpdef void initialize_pos_boundary_prioritization(short lensent, uint32_t nts, c
 						+ rightboundary, initial=INFINITY, axis=0)
 
 	logging.info("Predicted prioritization in %f seconds"
+				 % (time.perf_counter() - starttime))
 cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		Prob beam_beta, int beam_delta, short beam_size, double edp,
 		short min_beam, bint postpruning, bint prune_unary, postagging, pruning):
