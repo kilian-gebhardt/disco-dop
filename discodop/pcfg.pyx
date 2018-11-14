@@ -41,7 +41,7 @@ cpdef inline bint updatebeam(Prob[:] beam, Prob newprob, short size, short start
 	return False
 
 
-cpdef inline short findindex(Prob[:] beam, Prob target, short right):
+cpdef inline short findindex(const Prob[:] beam, Prob target, short right):
 	cdef short left = 0, center = right / 2
 	right = right - 1
 	while left <= right:
@@ -100,8 +100,13 @@ cdef class DenseCFGChart(CFGChart):
 		self.beamprobs = np.full(self.beamsize, np.inf, dtype='d')
 
 	cdef void flushbeam(self):
+		cdef size_t x
 		self.beam = INFINITY
-		self.beamprobs = np.full(self.beamsize, np.inf, dtype='d')
+		if self.beamprobs.shape[0] >= self.beamsize:
+			for x in range(self.beamsize):
+				self.beamprobs[x] = INFINITY
+		else:
+			self.beamprobs = np.full(self.beamsize, np.inf, dtype='d')
 
 	def root(self):
 		return cellidx(0, self.lensent, self.lensent,
