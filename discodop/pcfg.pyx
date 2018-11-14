@@ -3,16 +3,17 @@ from __future__ import print_function
 import logging
 import re
 import time
-from math import exp, log as pylog
+from math import exp as pyexp, log as pylog
 from itertools import count
-cimport numpy as cnp
 import numpy as np
 from .tree import Tree
 from .util import which
 
+
 cimport cython
 from cython.operator cimport postincrement, dereference
-from libc.math cimport HUGE_VAL as INFINITY
+from libc.math cimport HUGE_VAL as INFINITY, exp
+cimport numpy as cnp
 include "constants.pxi"
 
 
@@ -1079,7 +1080,7 @@ def testsent(sent, grammar, expected=None):
 		print('10 best parse trees (%d expected):' % expected)
 	derivations = lazykbest(chart, 10)
 	for a, p in derivations:
-		print(exp(-p), a)
+		print(pyexp(-p), a)
 	if expected is not None:
 		assert len(derivations) == expected, (len(derivations), expected)
 
