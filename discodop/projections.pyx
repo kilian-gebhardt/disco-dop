@@ -81,10 +81,11 @@ cpdef decode2dop(SmallLCFRSChart chart, mode='maxruleproduct'):
 	cdef:
 		ItemNo item, leftitem, rightitem, left, right
 		int n
+		int child
 		str frag
 		Edge edge, _edge
 		vector[vector[ItemNo]] children_s
-		SmallChartItem newitem
+		SmallChartItem newitem, zero, left_item
 		Prob prob
 		uint64_t vec
 		ProbRule * rule
@@ -98,6 +99,9 @@ cpdef decode2dop(SmallLCFRSChart chart, mode='maxruleproduct'):
 	cdef:
 		SmallLCFRSChart projchart = SmallLCFRSChart(chart.grammar, chart.sent, logprob=False) # , itemsestimate=chart.items.size())
 		# vector[Prob] lexprobs
+	print(projchart.itemindex.size())
+
+	zero = SmallChartItem(0, 0)
 
 	for n, a in enumerate(chart.grammar.backtransform):
 		print(n, chart.grammar.rulestr(chart.grammar.revrulemap[n]),
@@ -110,70 +114,99 @@ cpdef decode2dop(SmallLCFRSChart chart, mode='maxruleproduct'):
 	print(chart.parseforest.size())
 
 	# traverse items in bottom-up order
-	for n in range(0, chart.numitems() + 1):
+	for n in range(1, chart.numitems() + 1):
 		item = chart.getitemidx(n)
-
 		if chart.grammar.selfmapping[chart.label(item)] == 0:
 			continue
-			# if chart.parseforest[item].size() != 1:
-			# 	print(item, "size", chart.parseforest[item].size())
 
 		for edge in chart.parseforest[item]:
 			if edge.rule is not NULL:
 				assert edge.rule.no < len(backtransform)
 				frag = backtransform[edge.rule.no]
-				# print(edge.rule.no, frag)
-				# print(edge.rule.no, chart.grammar.tolabel[edge.rule.lhs], chart.grammar.tolabel[edge.rule.rhs1], chart.grammar.tolabel[edge.rule.rhs2])
-				# print(edge.rule.no, edge.rule.lhs, edge.rule.rhs1, edge.rule.rhs2)
 				children_s = recoverfragments_(item, edge, chart, backtransform)
-				# print("fragments:", children_s)
-				# print("nontfrags:", [[chart.label(item) for item in children] for children in children_s])
 				if children_s.size() != 1:
 					size = children_s[0].size()
 					for x in children_s:
 						if len(x) != size:
 							exit(0)
 
-				rep = tuple([str(i) for i in range(children_s[0].size())])
-				ftree = Tree(frag.format(*rep))
+				ftree = Tree(frag.format(*[str(i) for i in range(children_s[0].size())]))
 
 				for children in children_s:
+					for child in children:
+						if child == 0:
+							print(children)
+							assert child != 0
 					item_lookup = {}
 					prob = 1 / sentprob if maxruleproduct else 1.0
 					prob *= chart.outside[n] * exp(-edge.rule.prob)
 					children = list(reversed(children))
 					for i, c in enumerate(children):
-						# item_lookup[str(i)] = chart.label(c), chart.indices(c)
 						item_lookup[str(i)] = chart.label(c), chart.items[c].vec
 						prob *= chart.inside[c]
 
-					for t in ftree.postorder():
-						# x = { pos for c in t.children for pos in item_lookup[str(c)][1] }
-						vec = 0b0
-						for c in t.children:
-							vec = vec | item_lookup[str(c)][1]
-						# item_lookup[str(t)] = chart.grammar.toid[t.label], list(sorted(x))
-						item_lookup[str(t)] = chart.grammar.toid[t.label], vec
-
-						newitem.label = chart.grammar.toid[t.label]
-						newitem.vec = vec
+						newitem = SmallChartItem(chart.label(c), chart.items[c].vec)
 						itemidxit = projchart.itemindex.find(newitem)
 						if itemidxit == projchart.itemindex.end():
 							projchart.itemindex[newitem] = projchart.items.size()
+							assert projchart.itemindex[newitem] > 0
 							projchart.items.push_back(newitem)
 							projchart.parseforest.resize(projchart.itemindex.size())
 							projchart.probs.push_back(INFINITY)
+						else:
+							assert dereference(itemidxit).second != 0
+							# print(dereference(itemidxit).first.label, dereference(itemidxit).first.vec, dereference(itemidxit).second)
+							# print(projchart.itemindex.size())
+							# print(n, dereference(projchart.itemindex.find(zero)).second)
 
 					for t in ftree.postorder():
-						newitem.label, newitem.vec = item_lookup[str(t)]
-						root = dereference(projchart.itemindex.find(newitem)).second
-						left = right = 0
+						assert(dereference(projchart.itemindex.find(zero)).second == 0)
+						vec = 0b0
+						for c in t.children:
+							vec = vec | item_lookup[str(c)][1]
+
+						assert t.label in chart.grammar.toid
+						assert chart.grammar.toid.get(t.label) > 0
+						assert str(t) not in item_lookup
+						item_lookup[str(t)] = chart.grammar.toid.get(t.label), vec
+						newitem = SmallChartItem(chart.grammar.toid.get(t.label), vec)
+						itemidxit = projchart.itemindex.find(newitem)
+						if itemidxit == projchart.itemindex.end():
+							projchart.itemindex[newitem] = projchart.items.size()
+							assert projchart.itemindex[newitem] > 0
+							projchart.items.push_back(newitem)
+							projchart.parseforest.resize(projchart.itemindex.size())
+							projchart.probs.push_back(INFINITY)
+						else:
+							assert dereference(itemidxit).second != 0
+						# print(dereference(itemidxit).first.label, dereference(itemidxit).first.vec, dereference(itemidxit).second)
+						# print(projchart.itemindex.size())
+						# print(n, dereference(projchart.itemindex.find(zero)).second)
+
+					for t in ftree.postorder():
+						root_entry = item_lookup[str(t)]
+						# rootitem = SmallChartItem(item_lookup[str(t)][0], item_lookup[str(t)][1])
+						itemidxit = projchart.itemindex.find(SmallChartItem(root_entry[0], root_entry[1]))
+						assert itemidxit != projchart.itemindex.end()
+						root = dereference(itemidxit).second
+						left, right = 0, 0
 						if len(t.children) > 1:
-							newitem.label, newitem.vec = item_lookup[str(t.children[1])]
-							right = dereference(projchart.itemindex.find(newitem)).second
+							assert len(t.children) == 2
+							right_child = item_lookup[str(t.children[1])]
+							# right_item = SmallChartItem(right_child[0], right_child[1])
+							itemidxit = projchart.itemindex.find(SmallChartItem(right_child[0], right_child[1]))
+							if not itemidxit != projchart.itemindex.end():
+								print(right_child, t, item_lookup, children)
+							assert itemidxit != projchart.itemindex.end()
+							right = dereference(itemidxit).second
+							assert right > 0
+
 						assert len(t.children) > 0
-						newitem.label, newitem.vec = item_lookup[str(t.children[0])]
-						left = dereference(projchart.itemindex.find(newitem)).second
+						left_child = item_lookup[str(t.children[0])]
+						left_item = SmallChartItem(left_child[0], left_child[1])
+						itemidxit = projchart.itemindex.find(left_item)
+						assert itemidxit != projchart.itemindex.end()
+						left = dereference(itemidxit).second
 
 						# search edge:
 						found = False
@@ -189,30 +222,30 @@ cpdef decode2dop(SmallLCFRSChart chart, mode='maxruleproduct'):
 							rule = new ProbRule()
 							rule.prob = prob
 							rule.lhs = item_lookup[str(t)][0]
-							rule.rhs1 = newitem.label
-							rule.rhs2 = 0 if right == 0 else item_lookup[str(t.children[1])][0]
+							# rule.rhs1 = left_item.label
+							rule.rhs1 = left_child[0]
+							rule.rhs2 = 0 if right == 0 else right_child[0] #right_item.label
+							rule.args = 0
+							rule.lengths = 0
 							rules.push_back(rule)
 							# TODO can we just ignore args / lengths ?!
-							projchart.addedge(root, left, newitem, rule)
+							projchart.addedge(root, left, left_item, rule)
 
-			# elif edge.rule is not NULL:
-			# 	print(edge.rule.no, chart.grammar.tolabel[edge.rule.lhs], chart.grammar.tolabel[edge.rule.rhs1], chart.grammar.tolabel[edge.rule.rhs2])
-			# 	print(edge.rule.no, edge.rule.lhs, edge.rule.rhs1, edge.rule.rhs2)
 			else: # edge.rule is NULL and edge.rule.no < len(backtransform):
 				assert edge.rule is NULL
 				label = chart.label(item)
-				newitem.label = label
-				newitem.vec = chart.items[item].vec
+				# newitem = SmallChartItem(label, chart.items[item].vec)
 				idcs = chart.indices(item)
 				assert len(idcs) == 1
 				wordidx = idcs[0]
-				itemidxit = projchart.itemindex.find(newitem)
+				itemidxit = projchart.itemindex.find(SmallChartItem(label, chart.items[item].vec))
 				prob = 1 / sentprob if maxruleproduct else 1.0
 				prob *= chart.outside[item] * chart.inside[item]
 				if itemidxit == projchart.itemindex.end():
-					itemidx = projchart.itemindex[newitem] = projchart.items.size()
-					projchart.itemindex[newitem] = projchart.items.size()
-					projchart.items.push_back(newitem)
+					itemidx = projchart.itemindex[SmallChartItem(label, chart.items[item].vec)] = projchart.items.size()
+					projchart.itemindex[SmallChartItem(label, chart.items[item].vec)] = projchart.items.size()
+					assert projchart.itemindex[SmallChartItem(label, chart.items[item].vec)] > 0
+					projchart.items.push_back(SmallChartItem(label, chart.items[item].vec))
 					projchart.parseforest.resize(projchart.itemindex.size())
 					projchart.probs.push_back(INFINITY)
 					projchart.addlexedge(itemidx, wordidx)
@@ -228,11 +261,44 @@ cpdef decode2dop(SmallLCFRSChart chart, mode='maxruleproduct'):
 		pass
 		# TODO implement variational
 
+	# compute topological order
+	cdef vector[int] order
+	cdef set inorder = set()
+	cdef bint changed = True
+	cdef bint good
+	while changed:
+		changed = False
+		for itemidx in range(1, projchart.probs.size()):
+			if itemidx in inorder:
+				continue
+			good = True
+			for edge in projchart.parseforest[itemidx]:
+				if edge.rule is NULL:
+					continue
+				left = projchart._left(itemidx, edge)
+				assert left != 0
+				if left not in inorder:
+					good = False
+					break
+				if edge.rule.rhs2 != 0:
+					right = projchart._right(itemidx, edge)
+					assert right != 0
+					if right not in inorder:
+						good = False
+						break
+			if good:
+				inorder.add(itemidx)
+				order.push_back(itemidx)
+				changed = True
+
+	# assume that edges in chart can be ordered topologically
+	assert(order.size() + 1 == projchart.probs.size())
+	# print("Order", order.size(), projchart.probs.size(), order)
+
 	cdef vector[bint] processed
 	processed = [False for _ in range(projchart.items.size())]
 	# compute Viterbi probabilities bottom-up
-	# FIXME: increasing item order should ok?!
-	for n in list(range(1, projchart.numitems() + 1)) + [0]:
+	for n in order:
 		item = projchart.getitemidx(n)
 		processed[item] = True
 		for edge in projchart.parseforest[item]:
@@ -251,7 +317,6 @@ cpdef decode2dop(SmallLCFRSChart chart, mode='maxruleproduct'):
 					print(item, left, right)
 					assert processed[right]
 			projchart.updateprob(item, prob)
-
 
 	# select Viterbi parse
 	print(projchart._root().label, bin(projchart._root().vec), projchart.items.size())
