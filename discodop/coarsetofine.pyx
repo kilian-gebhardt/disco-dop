@@ -3,6 +3,7 @@ from __future__ import print_function
 from libcpp.vector cimport vector
 from libcpp.utility cimport pair
 from libcpp.algorithm cimport sort
+from libc.math cimport exp
 import re
 from .tree import Tree
 from .treetransforms import mergediscnodes, unbinarize, fanout, addbitsets
@@ -210,7 +211,44 @@ def posteriorthreshold(Chart chart, double threshold):
 	return posterior, msg
 
 
-def getinside(Chart chart):
+cpdef topologicalorder(Chart chart):
+	cdef:
+		vector[int] order
+		set inorder = set()
+		bint changed = True, good
+		ItemNo n, itemidx, left, right
+		Edge edge
+
+	while changed:
+		changed = False
+		for n in range(1, chart.numitems() + 1):
+			itemidx = chart.getitemidx(n)
+			if itemidx in inorder:
+				continue
+			good = True
+			for edge in chart.parseforest[itemidx]:
+				if edge.rule is NULL:
+					continue
+				left = chart._left(itemidx, edge)
+				assert left != 0
+				if left not in inorder:
+					good = False
+					break
+				if edge.rule.rhs2 != 0:
+					right = chart._right(itemidx, edge)
+					assert right != 0
+					if right not in inorder:
+						good = False
+						break
+			if good:
+				inorder.add(itemidx)
+				order.push_back(itemidx)
+				changed = True
+	return order
+
+
+
+def getinside(Chart chart, order=None):
 	"""Compute inside probabilities for a chart given its parse forest."""
 	# this needs to be bottom up, so need order in which items were added
 	# currently separate list, chart.itemsinorder
@@ -227,11 +265,15 @@ def getinside(Chart chart):
 	chart.inside.resize(chart.probs.size(), 0.0)
 
 	# traverse items in bottom-up order
-	for n in range(1, chart.numitems() + 1):
+	for n in order if order else range(1, chart.numitems() + 1):
 		item = chart.getitemidx(n)
 		for edge in chart.parseforest[item]:
 			if edge.rule is NULL:
-				prob = chart.lexprob(item, edge)
+				try:
+					prob = chart.lexprob(item, edge)
+				except ValueError:
+					assert chart.parseforest[item].size() == 1
+					prob = exp(-chart.probs[item])
 			elif edge.rule.rhs2 == 0:
 				leftitem = chart._left(item, edge)
 				prob = (edge.rule.prob
@@ -246,7 +288,7 @@ def getinside(Chart chart):
 			chart.inside[item] += prob
 
 
-def getoutside(Chart chart):
+def getoutside(Chart chart, order=None):
 	"""Compute outside probabilities for a chart given its parse forest."""
 	cdef ItemNo n, item, leftitem, rightitem
 	cdef Edge edge
@@ -255,7 +297,7 @@ def getoutside(Chart chart):
 	# traverse items in top-down order
 	chart.outside.resize(chart.probs.size(), 0.0)
 	chart.outside[chart.root()] = 1.0
-	for n in range(chart.numitems(), 0, -1):
+	for n in reversed(order) if order else range(chart.numitems(), 0, -1):
 		item = chart.getitemidx(n)
 		# can we define outside[item] simply as sentprob - inside[item] ?
 		# chart.outside[item] = sentprob - chart.inside[item]

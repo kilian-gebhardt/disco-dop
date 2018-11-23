@@ -1,6 +1,7 @@
 from .containers cimport Chart, RankedEdge, Edge, ItemNo, Label, Prob, Position, ProbRule
-from .coarsetofine import getinside, getoutside
+from .coarsetofine import getinside, getoutside, topologicalorder
 from libcpp.vector cimport vector
+from libcpp.pair cimport pair
 from libc.math cimport HUGE_VAL as INFINITY, exp, log
 from sys import exit
 from .plcfrs cimport SmallChartItem, SmallLCFRSChart, LCFRSChart_fused
@@ -10,13 +11,12 @@ from libc.stdint cimport uint64_t
 from .disambiguation import getderivations
 
 
-cdef vector[vector[ItemNo]] recoverfragments_(ItemNo v, Edge edge, Chart chart,
+cdef vector[vector[pair[ItemNo, Prob]]] recoverfragments_(ItemNo v, Edge edge, Chart chart,
 		list backtransform):
 	cdef RankedEdge child
 	cdef list children = []
-	cdef vector[ItemNo] childitems
-	cdef vector[vector[ItemNo]] childitemss = []
-	cdef vector[int] childranks
+	cdef vector[pair[ItemNo, Prob]] childitems
+	cdef vector[vector[pair[ItemNo, Prob]]] childitemss = []
 	cdef int n
 	cdef str frag = backtransform[edge.rule.no]  # template
 	ruleno = edge.rule.no  # FIXME only for debugging
@@ -34,21 +34,21 @@ cdef vector[vector[ItemNo]] recoverfragments_(ItemNo v, Edge edge, Chart chart,
 		return [recover_left_most([], v, edge, chart, backtransform)]
 
 
-cdef vector[ItemNo] recover_left_most(vector[ItemNo] childitems, ItemNo v, Edge edge, Chart chart, list backtransform):
-	childitems.push_back(chart._left(v, edge))
+cdef vector[pair[ItemNo, Prob]] recover_left_most(vector[pair[ItemNo, Prob]] childitems, ItemNo v, Edge edge, Chart chart, list backtransform):
+	childitems.push_back((chart._left(v, edge), edge.rule.prob))
 	return childitems
 
 
 cdef list recover_rec(list childitems, ItemNo v, Edge edge, Chart chart, list backtransform):
 	if chart.grammar.selfmapping[edge.rule.rhs1] == 0:
-		childitems.append(chart._right(v, edge))
+		childitems.append((chart._right(v, edge), edge.rule.prob))
 		v = chart._left(v, edge)
 		result = []
 		for _edge in chart.parseforest[v]:
 			result.extend(recover_rec(list(childitems), v, _edge, chart, backtransform))
 		return result
 	elif edge.rule.rhs2:  # is there a right child?
-		childitems.append(chart._right(v, edge))
+		childitems.append((chart._right(v, edge), edge.rule.prob))
 		return [recover_left_most(childitems, v, edge, chart, backtransform)]
 	else:
 		return [recover_left_most(childitems, v, edge, chart, backtransform)]
@@ -65,26 +65,38 @@ cdef class UnrankedItem:
 # @cython.cdivision(True)
 cpdef decode2dop(SmallLCFRSChart chart, mode='maxruleproduct'):
 	# 0. remove unreachable entries from chart
-	# TODO
+	# TODO: maybe do elsewhere?
+	chart.filter()
+	cdef:
+		vector[ItemNo] chart_top_order = topologicalorder(chart)
+		int n
+
+
+	# TODO: the charts are not necessarily acyclic!
+	# TODO: implement fixed point approximation for inside/outside weights!
+	if chart_top_order.size() != chart.numitems():
+		print(chart_top_order.size(), chart.numitems())
+	assert chart_top_order.size() == chart.numitems()
+
 
 	# 1. compute inside/outside scores for all items in chart
 	if not chart.inside.size():
 		origlogprob = chart.grammar.logprob
 		chart.grammar.switch(chart.grammar.currentmodel, logprob=False)
-		getinside(chart)
-		getoutside(chart)
+		getinside(chart, chart_top_order)
+		getoutside(chart, chart_top_order)
 		chart.grammar.switch(chart.grammar.currentmodel, logprob=origlogprob)
 	sentprob = chart.inside[chart.root()]
+	assert 0 <= sentprob <= 1
 
 	backtransform = chart.grammar.backtransform
 
 	cdef:
 		ItemNo item, leftitem, rightitem, left, right
-		int n
 		int child
 		str frag
 		Edge edge, _edge
-		vector[vector[ItemNo]] children_s
+		vector[vector[pair[ItemNo, Prob]]] children_s
 		SmallChartItem newitem, zero, left_item
 		Prob prob
 		uint64_t vec
@@ -99,19 +111,11 @@ cpdef decode2dop(SmallLCFRSChart chart, mode='maxruleproduct'):
 	cdef:
 		SmallLCFRSChart projchart = SmallLCFRSChart(chart.grammar, chart.sent, logprob=False) # , itemsestimate=chart.items.size())
 		# vector[Prob] lexprobs
-	print(projchart.itemindex.size())
+	# print(projchart.itemindex.size())
 
 	zero = SmallChartItem(0, 0)
 
-	for n, a in enumerate(chart.grammar.backtransform):
-		print(n, chart.grammar.rulestr(chart.grammar.revrulemap[n]),
-					'\t', a)
-		if n > 20:
-			break
-
-	print('\n\n\n')
-
-	print(chart.parseforest.size())
+	# print(chart.parseforest.size())
 
 	# traverse items in bottom-up order
 	for n in range(1, chart.numitems() + 1):
@@ -124,24 +128,27 @@ cpdef decode2dop(SmallLCFRSChart chart, mode='maxruleproduct'):
 				assert edge.rule.no < len(backtransform)
 				frag = backtransform[edge.rule.no]
 				children_s = recoverfragments_(item, edge, chart, backtransform)
-				if children_s.size() != 1:
-					size = children_s[0].size()
-					for x in children_s:
-						if len(x) != size:
-							exit(0)
+				# if children_s.size() != 1:
+				# 	size = children_s[0].size()
+				# 	for x in children_s:
+				# 		if len(x) != size:
+				# 			exit(0)
 
 				ftree = Tree(frag.format(*[str(i) for i in range(children_s[0].size())]))
 
 				for children in children_s:
-					for child in children:
-						if child == 0:
-							print(children)
-							assert child != 0
+					# for child, _ in children:
+					# 	if child == 0:
+					# 		print(children)
+					# 		assert child != 0
 					item_lookup = {}
 					prob = 1 / sentprob if maxruleproduct else 1.0
+					assert edge.rule.prob >= 0
 					prob *= chart.outside[n] * exp(-edge.rule.prob)
-					children = list(reversed(children))
-					for i, c in enumerate(children):
+					children = [(c[0], c[1]) for c in reversed(children)]
+					for i, (c, p) in enumerate(children):
+						# todo: are all the probabilities of the intermediate rules 1.0?
+						# todo: if not, include them into prob!
 						item_lookup[str(i)] = chart.label(c), chart.items[c].vec
 						prob *= chart.inside[c]
 
@@ -159,6 +166,7 @@ cpdef decode2dop(SmallLCFRSChart chart, mode='maxruleproduct'):
 							# print(projchart.itemindex.size())
 							# print(n, dereference(projchart.itemindex.find(zero)).second)
 
+					assert 1 + 1.e-5 >= prob >= 0 - 1e-5
 					for t in ftree.postorder():
 						assert(dereference(projchart.itemindex.find(zero)).second == 0)
 						vec = 0b0
@@ -208,7 +216,7 @@ cpdef decode2dop(SmallLCFRSChart chart, mode='maxruleproduct'):
 						assert itemidxit != projchart.itemindex.end()
 						left = dereference(itemidxit).second
 
-						# search edge:
+						# check, if edge in projchart:
 						found = False
 						for _edge in projchart.parseforest[root]:
 							if projchart._left(root, _edge) == left and \
@@ -261,69 +269,58 @@ cpdef decode2dop(SmallLCFRSChart chart, mode='maxruleproduct'):
 		pass
 		# TODO implement variational
 
-	# compute topological order
-	cdef vector[int] order
-	cdef set inorder = set()
-	cdef bint changed = True
-	cdef bint good
-	while changed:
-		changed = False
-		for itemidx in range(1, projchart.probs.size()):
-			if itemidx in inorder:
-				continue
-			good = True
-			for edge in projchart.parseforest[itemidx]:
-				if edge.rule is NULL:
-					continue
-				left = projchart._left(itemidx, edge)
-				assert left != 0
-				if left not in inorder:
-					good = False
-					break
-				if edge.rule.rhs2 != 0:
-					right = projchart._right(itemidx, edge)
-					assert right != 0
-					if right not in inorder:
-						good = False
-						break
-			if good:
-				inorder.add(itemidx)
-				order.push_back(itemidx)
-				changed = True
+	cdef vector[ItemNo] order = topologicalorder(projchart)
 
 	# assume that edges in chart can be ordered topologically
 	assert(order.size() + 1 == projchart.probs.size())
 	# print("Order", order.size(), projchart.probs.size(), order)
 
-	cdef vector[bint] processed
-	processed = [False for _ in range(projchart.items.size())]
 	# compute Viterbi probabilities bottom-up
+
+	# cdef vector[bint] processed
+	# processed = [False for _ in range(projchart.items.size())]
 	for n in order:
 		item = projchart.getitemidx(n)
-		processed[item] = True
+		# processed[item] = True
 		for edge in projchart.parseforest[item]:
 			if edge.rule is NULL: # lexical rules are already processed
 				continue
 			left = projchart._left(item, edge)
-			if not processed[left]:
-					print(item, left, right)
-					assert processed[left]
+			# if not processed[left]:
+			# 		print(item, left, right)
+			# assert processed[left]
+			# if not 1 >= edge.rule.prob >= 0:
+			# 	print(edge.rule.prob)
+			assert 1 + 1e-5 >= edge.rule.prob >= 0 - 1.e-5
 			prob = -log(edge.rule.prob)
 			prob += projchart.probs[projchart._left(item, edge)]
 			if edge.rule.rhs2:
 				right = projchart._right(item, edge)
 				prob += projchart.probs[right]
-				if not processed[right]:
-					print(item, left, right)
-					assert processed[right]
+				# if not processed[right]:
+				# 	print(item, left, right)
+				# assert processed[right]
 			projchart.updateprob(item, prob)
 
 	# select Viterbi parse
-	print(projchart._root().label, bin(projchart._root().vec), projchart.items.size())
-	getderivations(projchart, 10, derivstrings=True)
+	# print(projchart._root().label, bin(projchart._root().vec), projchart.items.size())
+	if projchart:
+		getderivations(projchart, 10, derivstrings=True)
+		for derivstr, prob in projchart.derivations:
+			if prob < 0:
+				print(derivstr, prob)
+			assert prob >= 0
+		results = [(derivstr, exp(-prob), []) for derivstr, prob in
+					projchart.derivations]
+	else:
+		results = []
 
-	print(projchart.derivations)
+	# print(projchart.derivations)
 
 	# clean up rules
 	for rule in rules:
 		del rule
+
+	msg = "items in projected chart: %d" % chart.numitems()
+
+	return results, msg

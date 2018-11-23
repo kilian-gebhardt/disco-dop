@@ -123,8 +123,9 @@ DEFAULTSTAGE = dict(
 		beam_size=1,
 		edp=2.0e-3,  # exponential decay pruning (shrinks beam for longer spans)
 		min_beam=1,  # minimum beam if exponential decay pruning is used
-		postpruning=True,
-		prune_unary=False,
+		postpruning=True,  # prune items that were inside beam when found
+				# but fall out due to some item found later
+		prune_unary=False,  # also prune items derived by unary productions
 		# deprecated options
 		kbest=True, sample=False, binarized=True,
 		iterate=False, complement=False,
@@ -442,35 +443,39 @@ class Parser(object):
 			if (sent and chart and stage.mode not in ('dop-rerank', 'mc-rerank')
 					and not (self.relationalrealizational and stage.split)):
 				begindisamb = time.perf_counter()
-				disambiguation.getderivations(
-						chart, stage.m,
-						derivstrings=stage.dop not in ('doubledop', 'dop1')
-								or stage.objective == 'mcp'
-								or self.verbosity >= 3)
-				if self.verbosity >= 3:
-					print('%d-best derivations:\n%s' % (
-						min(stage.m, 100),
-						'\n'.join('%d. %s %s' % (n + 1,
-							('subtrees=%d' % abs(int(prob / log(0.5))))
-							if stage.objective == 'shortest'
-							else ('p=%g' % exp(-prob)), deriv)
-						for n, (deriv, prob) in enumerate(
-							chart.derivations[:100]))))
-					print('sum of probabilities: %g\n' % sum(exp(-prob)
-							for _, prob in chart.derivations[:100]))
-				if stage.objective == 'shortest':
-					stage.grammar.switch('default'
-							if stage.estimator == 'rfe'
-							else stage.estimator, True)
-				parsetrees, msg1 = disambiguation.marginalize(
-						stage.objective if stage.dop else 'mpd',
-						chart, sent=sent, tags=tags,
-						k=stage.m, sldop_n=stage.sldop_n,
-						mcplambda=stage.mcplambda,
-						mcplabels=stage.mcplabels,
-						ostag=stage.dop == 'ostag',
-						require=set(require or ()),
-						block=set(block or ()))
+				if stage.dop == 'doubledop' and stage.objective == 'mrp':
+					from .projections import decode2dop
+					parsetrees, msg1 = decode2dop(chart)
+				else:
+					disambiguation.getderivations(
+							chart, stage.m,
+							derivstrings=stage.dop not in ('doubledop', 'dop1')
+									or stage.objective == 'mcp'
+									or self.verbosity >= 3)
+					if self.verbosity >= 3:
+						print('%d-best derivations:\n%s' % (
+							min(stage.m, 100),
+							'\n'.join('%d. %s %s' % (n + 1,
+								('subtrees=%d' % abs(int(prob / log(0.5))))
+								if stage.objective == 'shortest'
+								else ('p=%g' % exp(-prob)), deriv)
+							for n, (deriv, prob) in enumerate(
+								chart.derivations[:100]))))
+						print('sum of probabilities: %g\n' % sum(exp(-prob)
+								for _, prob in chart.derivations[:100]))
+					if stage.objective == 'shortest':
+						stage.grammar.switch('default'
+								if stage.estimator == 'rfe'
+								else stage.estimator, True)
+					parsetrees, msg1 = disambiguation.marginalize(
+							stage.objective if stage.dop else 'mpd',
+							chart, sent=sent, tags=tags,
+							k=stage.m, sldop_n=stage.sldop_n,
+							mcplambda=stage.mcplambda,
+							mcplabels=stage.mcplabels,
+							ostag=stage.dop == 'ostag',
+							require=set(require or ()),
+							block=set(block or ()))
 				msg += 'disambiguation: %s, %gs\n\t' % (
 						msg1, time.perf_counter() - begindisamb)
 				if self.verbosity >= 3:
@@ -917,7 +922,7 @@ def readparam(filename):
 		if stage.dop:
 			assert stage.estimator in ('rfe', 'ewe', 'bon')
 			assert stage.objective in ('mpp', 'mpd', 'mcp', 'shortest',
-					'sl-dop', 'sl-dop-simple')
+					'sl-dop', 'sl-dop-simple', 'mrp')
 	assert params['binarization'].method in (
 			None, 'default', 'optimal', 'optimalhead')
 	postagging = params['postagging']
