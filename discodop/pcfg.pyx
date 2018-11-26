@@ -154,15 +154,19 @@ cdef class DenseCFGChart(CFGChart):
 				elif prob < self.probs[item]:  # prob falls within beam
 					self.probs[item] = prob
 			else:
-				if not newitem and prob < self.probs[item] and prob + est < self.beam:
-					self.probs[item] = prob
-					startidx = findindex(self.beamprobs, self.probs[item] + est, self.beamsize) + 1
-					if startidx <= self.beamsize and \
-						updatebeam(self.beamprobs, prob + est, self.beamsize, startidx):
-						if beam:
-							self.beam = self.beamprobs[0] + beam
-						else:
-							self.beam = self.beamprobs[self.beamsize - 1]
+				if not newitem and prob + est < self.beam:
+					if prob < self.probs[item]:
+						self.probs[item] = prob
+						startidx = findindex(self.beamprobs, self.probs[item] + est, self.beamsize) + 1
+						if startidx <= self.beamsize and \
+							updatebeam(self.beamprobs, prob + est, self.beamsize, startidx):
+							if beam:
+								self.beam = self.beamprobs[0] + beam
+							else:
+								self.beam = self.beamprobs[self.beamsize - 1]
+					# don't add edge in this case
+					elif prob > self.beamprobs[self.beamsize - 1]:
+						return False
 				elif newitem and prob + est < self.beam:
 					if updatebeam(self.beamprobs, prob + est, self.beamsize, self.beamsize):
 						self.probs[item] = prob
@@ -170,6 +174,9 @@ cdef class DenseCFGChart(CFGChart):
 							self.beam = self.beamprobs[0] + beam
 						else:
 							self.beam = self.beamprobs[self.beamsize - 1]
+					# don't add edge in this case
+					else:
+						return False
 				else:
 					return False
 		elif prob < self.probs[item]:
