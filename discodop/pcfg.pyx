@@ -3,7 +3,7 @@ from __future__ import print_function
 import logging
 import re
 import time
-from math import exp as pyexp, log as pylog
+from math import exp as pyexp
 from itertools import count
 import numpy as np
 from .tree import Tree
@@ -12,7 +12,7 @@ from .util import which
 
 cimport cython
 from cython.operator cimport postincrement, dereference
-from libc.math cimport HUGE_VAL as INFINITY, exp
+from libc.math cimport HUGE_VAL as INFINITY, exp, log
 cimport numpy as cnp
 include "constants.pxi"
 
@@ -956,7 +956,7 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 					and postagging.method == 'unknownword'
 					and postagging.closedclasswords
 					and word not in postagging.closedclasswords):
-				reserveprob = -pylog(1 - openclassfactor)
+				reserveprob = -log(1 - openclassfactor)
 			else:
 				reserveprob = 0
 			for n in dereference(it).second:
@@ -996,7 +996,7 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 						continue
 					lhs = lexrule.lhs
 					chart.updateprob(cell + lhs,
-							lexrule.prob - pylog(openclassfactor), 0.0, 0.0)
+							lexrule.prob - log(openclassfactor), 0.0, 0.0)
 					chart.addedge(cell + lhs, right, NULL)
 					recognized = True
 					if midfilter is not NULL:
