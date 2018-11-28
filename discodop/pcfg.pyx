@@ -734,7 +734,7 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 	for span in range(2, lensent + 1):
 		# constituents from left to right
 		if edp:
-			chart.beamsize = cmax(min_beam, int(min_beam
+			chart.beamsize = max(min_beam, int(min_beam
 					+ (beam_size - min_beam) * exp(-edp * (span-1) * lensent)))
 		for left in range(lensent - span + 1):
 			if not openbracket[left]:
