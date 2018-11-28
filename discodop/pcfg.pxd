@@ -65,7 +65,7 @@ cdef class DenseCFGChart(CFGChart):
 	cpdef Prob _subtreeprob(self, uint64_t item)
 	cpdef Prob getbeambucket(self, size_t cell)
 	cdef bint _hasitem(self, uint64_t item)
-	cdef int prunecell(self, uint64_t cell, Prob[:], Prob[:], bint)
+	cdef int prunecell(self, uint64_t cell, const Prob[:], const Prob[:])
 	cdef void flushbeam(self)
 
 
@@ -73,10 +73,12 @@ cdef class DenseCFGChart(CFGChart):
 cdef class SparseCFGChart(CFGChart):
 	cdef sparse_hash_map[uint64_t, ItemNo] itemindex
 	cdef void addedge(self, uint64_t item, Idx mid, ProbRule *rule)
-	cdef bint updateprob(self, uint64_t item, Prob prob, Prob beam)
+	cdef bint updateprob(self, uint64_t item, Prob prob, Prob beam, Prob est)
 	cdef Label _label(self, uint64_t item)
 	cdef Prob _subtreeprob(self, uint64_t item)
 	cdef bint _hasitem(self, uint64_t item)
+	cdef int prunecell(self, uint64_t cell, const Prob[:], const Prob[:])
+	cdef void flushbeam(self)
 
 
 # @cython.final

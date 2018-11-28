@@ -25,7 +25,8 @@ cdef inline uint64_t cellstruct(Idx start, Idx end):
 	return result.dt
 
 
-cpdef inline bint updatebeam(Prob[:] beam, Prob newprob, short size, short start):
+cpdef inline bint updatebeam(Prob[:] beam, Prob newprob, short size,
+			short start):
 	cdef short i = start
 	while i > 0:
 		if newprob >= beam[i-1]:
@@ -145,7 +146,7 @@ cdef class DenseCFGChart(CFGChart):
 		cdef bint newitem = self.probs[item] == INFINITY
 
 		if beam or self.beamsize:
-			if beam and not self.beamsize:  # use beam thresholding
+			if beam and not self.beamsize:  # use only beam thresholding
 				if prob + est > self.beam:  # prob falls outside of beam
 					return False
 				elif prob + est + beam < self.beam:  # shrink beam
@@ -153,53 +154,60 @@ cdef class DenseCFGChart(CFGChart):
 					self.probs[item] = prob
 				elif prob < self.probs[item]:  # prob falls within beam
 					self.probs[item] = prob
-			else:
-				if not newitem and prob + est < self.beam and prob + est <= self.beamprobs[self.beamsize - 1]:
+			else:  # use local beam ranking (+ optional beam thresholding)
+				# item not new and prob within beam
+				if not newitem and prob + est < self.beam \
+					and prob + est <= self.beamprobs[self.beamsize - 1]:
 					if prob < self.probs[item]:
 						self.probs[item] = prob
-						startidx = findindex(self.beamprobs, self.probs[item] + est, self.beamsize) + 1
+						startidx = findindex(self.beamprobs,
+								self.probs[item] + est, self.beamsize) + 1
 						if startidx <= self.beamsize and \
-							updatebeam(self.beamprobs, prob + est, self.beamsize, startidx):
+							updatebeam(self.beamprobs, prob + est,
+									self.beamsize, startidx):
 							if beam:
 								self.beam = self.beamprobs[0] + beam
 							else:
 								self.beam = self.beamprobs[self.beamsize - 1]
-				elif newitem and prob + est < self.beam:
-					if updatebeam(self.beamprobs, prob + est, self.beamsize, self.beamsize):
-						self.probs[item] = prob
-						if beam:
-							self.beam = self.beamprobs[0] + beam
-						else:
-							self.beam = self.beamprobs[self.beamsize - 1]
-					# don't add edge in this case
+				# item new and prob within beam
+				elif newitem and prob + est < self.beam and updatebeam(
+							self.beamprobs, prob + est, self.beamsize,
+							self.beamsize):
+					self.probs[item] = prob
+					if beam:
+						self.beam = self.beamprobs[0] + beam
 					else:
-						return False
+						self.beam = self.beamprobs[self.beamsize - 1]
+				# prob falls outside of beam
 				else:
 					return False
 		elif prob < self.probs[item]:
 			self.probs[item] = prob
+
 		# can infer order of binary rules, but need to track unaries explicitly
 		if newitem:
 			self.items.push_back(item)
 		return True
 
-	cdef int prunecell(self, uint64_t cell, Prob[:] left, Prob[:] right, bint useest):
+	cdef int prunecell(self, uint64_t cell,
+			const Prob[:] left, const Prob[:] right):
 		"""Set 0 probability to each item of a cell that falls outside the beam. 
 		
 		Return number of pruned items."""
 		cdef int pruning_counter = 0
 		cdef uint64_t item
 		cdef uint64_t nont
+		cdef Prob prob
 		cdef est = 0.0
-		beamitem = cell // self.grammar.nonterminals
+		cdef bint useest = left is not None and right is not None
 		for nont in range(1, self.grammar.nonterminals):
 			item = cell + nont
 			if useest:
 				est = left[nont] + right[nont]
-			if (isfinite(self.probs[item])
-					and self.probs[item] + est > self.beam): # buckets[beamitem]):
+			prob = self.probs[item]
+			if isfinite(prob) and prob + est > self.beam:
 				self.probs[item] = INFINITY
-				# self.parseforest[item].clear()
+				# FIXME self.parseforest[item].clear() ?
 				pruning_counter += 1
 		return pruning_counter
 
@@ -336,6 +344,9 @@ cdef class SparseCFGChart(CFGChart):
 		self.items.push_back(sentinel)
 		self.itemindex[sentinel] = 0
 		self.probs.push_back(INFINITY)
+		self.beam = INFINITY
+		self.beamsize = 0
+		self.beamprobs = np.full(self.beamsize, np.inf, dtype='d')
 
 	def root(self):
 		return self.itemindex[cellstruct(0, self.lensent) + self.start]
@@ -358,6 +369,30 @@ cdef class SparseCFGChart(CFGChart):
 				bestitem = self.itemindex[cell + label]
 		return bestitem
 
+	cdef int prunecell(self, uint64_t cell, const Prob[:] left,
+			const Prob[:] right):
+		"""Set 0 probability to each item of a cell that falls outside the beam. 
+		
+		Return number of pruned items."""
+		cdef int pruning_counter = 0
+		cdef uint64_t nont
+		cdef uint64_t itemidx
+		cdef Prob prob
+		cdef est = 0.0
+		cdef useest = left is not None and right is not None
+		for nont in range(1, self.grammar.nonterminals):
+			if useest:
+				est = left[nont] + right[nont]
+			it = self.itemindex.find(cell + nont)
+			if it != self.itemindex.end():
+				itemidx = dereference(it).second
+				prob = self.probs[itemidx]
+				if isfinite(prob) and prob + est > self.beam:
+					self.probs[itemidx] = INFINITY
+					# FIXME self.parseforest[itemidx].clear() ?
+					pruning_counter += 1
+		return pruning_counter
+
 	cdef void addedge(self, uint64_t item, Idx mid, ProbRule *rule):
 		"""Add new edge to parse forest."""
 		cdef ItemNo itemidx = self.itemindex[item]
@@ -367,26 +402,60 @@ cdef class SparseCFGChart(CFGChart):
 		edge.pos.mid = mid
 		self.parseforest[itemidx].push_back(edge)
 
-	cdef bint updateprob(self, uint64_t item, Prob prob, Prob beam):
+	cdef void flushbeam(self):
+		cdef size_t x
+		self.beam = INFINITY
+		if self.beamprobs.shape[0] >= self.beamsize:
+			for x in range(self.beamsize):
+				self.beamprobs[x] = INFINITY
+		else:
+			self.beamprobs = np.full(self.beamsize, np.inf, dtype='d')
+
+	cdef bint updateprob(self, uint64_t item, Prob prob, Prob beam, Prob est):
 		"""Update probability for item if better than current one.
 
 		Add item if not seen before; return False if pruned."""
-		cdef CFGItem itemx
-		cdef uint64_t beamitem
 		cdef ItemNo itemidx = self.itemindex[item]
 		cdef bint newitem = itemidx == 0
-		cdef bint updateitem = newitem
-		if beam:
-			itemx.dt = item
-			beamitem = cellidx(itemx.st.start, itemx.st.end, self.lensent, 1)
-			if prob > self.beambuckets[beamitem]:  # prob falls outside of beam
-				return False
-			elif prob + beam < self.beambuckets[beamitem]:  # shrink beam
-				self.beambuckets[beamitem] = prob + beam
-				updateitem = True
-			elif newitem or prob < self.probs[itemidx]:  # prob falls within beam
-				updateitem = True
-		elif prob < self.probs[itemidx]:
+		cdef bint updateitem = False
+
+		if beam or self.beamsize:
+			if beam and not self.beamsize:  # use only beam thresholding
+				if prob + est > self.beam:  # prob falls outside of beam
+					return False
+				elif prob + est + beam < self.beam:  # shrink beam
+					self.beam = prob + est + beam
+					updateitem = True
+				elif not newitem and prob < self.probs[itemidx]:
+					# prob falls within beam
+					updateitem = True
+			else:  # use local beam ranking (+ optional beam thresholding)
+				# item not new and prob within beam
+				if not newitem and prob + est < self.beam \
+					and prob + est <= self.beamprobs[self.beamsize - 1]:
+					if prob < self.probs[itemidx]:
+						updateitem = True
+						startidx = findindex(self.beamprobs,
+								self.probs[itemidx] + est, self.beamsize) + 1
+						if startidx <= self.beamsize and \
+							updatebeam(self.beamprobs, prob + est,
+									self.beamsize, startidx):
+							if beam:
+								self.beam = self.beamprobs[0] + beam
+							else:
+								self.beam = self.beamprobs[self.beamsize - 1]
+				# item new and prob within beam
+				elif newitem and prob + est < self.beam and updatebeam(
+							self.beamprobs, prob + est, self.beamsize,
+							self.beamsize):
+					if beam:
+						self.beam = self.beamprobs[0] + beam
+					else:
+						self.beam = self.beamprobs[self.beamsize - 1]
+				# prob falls outside of beam
+				else:
+					return False
+		elif not newitem and prob < self.probs[itemidx]:
 			updateitem = True
 		if newitem:
 			itemidx = self.itemindex[item] = self.items.size()
@@ -536,7 +605,9 @@ def parse(sent, Grammar grammar, tags=None, start=None, whitelist=None,
 
 
 
-cpdef void initialize_pos_boundary_prioritization(short lensent, uint32_t nts, cnp.ndarray leftboundaryscores, cnp.ndarray rightboundaryscores, CFGChart_fused chart, pruning):
+cpdef void initialize_pos_boundary_prioritization(short lensent, uint32_t nts,
+			cnp.ndarray leftboundaryscores, cnp.ndarray rightboundaryscores,
+			CFGChart_fused chart, pruning):
 	cdef:
 		short sstart, sstop, sentpos
 		vector[short] posconversion = pruning.pruningprm.posconversion
@@ -624,12 +695,7 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		closebracket = [True for _ in range(lensent)]
 		dynamicbeams = []
 
-	if beam_beta and CFGChart_fused is SparseCFGChart:
-		chart.beambuckets.resize(
-				cellidx(lensent - 1, lensent, lensent, 1) + 1,
-				INFINITY)
-
-	if CFGChart_fused is DenseCFGChart and prune_unary:
+	if prune_unary:
 		chart.beamsize = beam_size
 		chart.flushbeam()
 
@@ -660,16 +726,15 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 		initialize_pos_boundary_prioritization(lensent, nts, leftboundaryscores,
 			rightboundaryscores, chart, pruning)
 
-	if CFGChart_fused is DenseCFGChart:
-		if beam_size < min_beam:
+	if beam_size < min_beam:
 			min_beam = beam_size
-		chart.beamsize = beam_size
-		chart.flushbeam()
+	chart.beamsize = beam_size
+	chart.flushbeam()
 
 	for span in range(2, lensent + 1):
 		# constituents from left to right
-		if CFGChart_fused is DenseCFGChart and edp:
-			chart.beamsize = max(min_beam, int(min_beam
+		if edp:
+			chart.beamsize = cmax(min_beam, int(min_beam
 					+ (beam_size - min_beam) * exp(-edp * (span-1) * lensent)))
 		for left in range(lensent - span + 1):
 			if not openbracket[left]:
@@ -680,9 +745,9 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 			if dynamicbeams.size() > 0:
 				beam_beta = dynamicbeams[cellidx(left, right, lensent, 1)]
 				if beam_beta == float('-Inf'): continue
+			chart.flushbeam()
 			if CFGChart_fused is DenseCFGChart:
 				cell = cellidx(left, right, lensent, nts)
-				chart.flushbeam()
 			elif CFGChart_fused is SparseCFGChart:
 				cell = cellstruct(left, right)
 			lastidx = chart.items.size()
@@ -700,8 +765,8 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 					narrowr = midfilter.minright[left * nts + rule.rhs1]
 					narrowl = midfilter.minleft[right * nts + rule.rhs2]
 					if (rule.rhs2 == 0 or narrowr >= right or narrowl < narrowr
-							or (usemask and TESTBIT(
-								&(grammar.mask[0]), rule.no))):
+						or (usemask and TESTBIT(
+							&(grammar.mask[0]), rule.no))):
 						n += 1
 						rule = &(grammar.bylhs[lhs][n])
 						continue
@@ -723,14 +788,9 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 							continue
 						prob += chart._subtreeprob(rightitem)
 						if isfinite(prob):
-							if CFGChart_fused is DenseCFGChart and \
-								chart.updateprob(item, prob + rule.prob,
+							if chart.updateprob(item, prob + rule.prob,
 									beam_beta if span <= beam_delta else 0.0,
 									est if posboundaryprio else 0.0):
-								chart.addedge(item, mid, rule)
-							elif CFGChart_fused is SparseCFGChart and \
-								chart.updateprob(item, prob + rule.prob,
-									beam_beta if span <= beam_delta else 0.0):
 								chart.addedge(item, mid, rule)
 							else:
 								blocked += 1
@@ -741,25 +801,22 @@ cpdef parse_grammarloop(sent, CFGChart_fused chart, tags,
 					updatemidfilter(midfilter, left, right, lhs, nts)
 
 			if not prune_unary:
-				if postpruning and CFGChart_fused is DenseCFGChart \
-				and (beam_beta or beam_size):
+				if postpruning and (beam_beta or beam_size):
 					pruned += chart.prunecell(cell,
-						lbview[left] if posboundaryprio else None,
-						rbview[right-1] if posboundaryprio else None,
-						posboundaryprio)
+							lbview[left] if posboundaryprio else None,
+							rbview[right-1] if posboundaryprio else None)
 				chart.beamsize = 0
+
 			applyunaryrules[CFGChart_fused](chart, left, right, cell, lastidx,
 					unaryagenda, &midfilter, &blocked, None,
 					beam_beta if prune_unary else 0.0, beam_delta,
 					lbview[left] if posboundaryprio else None,
 					rbview[right-1] if posboundaryprio else None)
 
-			if prune_unary and postpruning and CFGChart_fused is DenseCFGChart \
-				and (beam_beta or beam_size):
+			if prune_unary and postpruning and (beam_beta or beam_size):
 				pruned += chart.prunecell(cell,
-					lbview[left] if posboundaryprio else None,
-					rbview[right-1] if posboundaryprio else None,
-					posboundaryprio)
+						lbview[left] if posboundaryprio else None,
+						rbview[right-1] if posboundaryprio else None)
 
 	msg = '%s%s, blocked %s%s' % (
 			'' if chart else 'no parse; ', chart.stats(), blocked,
@@ -787,9 +844,7 @@ cdef parse_leftchildloop(sent, SparseCFGChart chart, tags,
 		Prob[:] dummy = None
 		Prob[:,:] dummy2 = None
 	cellindex.resize(cellidx(lensent - 1, lensent, lensent, 1) + 2, 0)
-	if beam_beta:
-		chart.beambuckets.resize(
-				cellidx(lensent - 1, lensent, lensent, 1) + 1, INFINITY)
+
 	# assign POS tags
 	covered, msg = populatepos(chart, sent, tags, unaryagenda, whitelist, 0.0,
 			0, dummy2, dummy2, &blocked, NULL, &cellindex, postagging)
@@ -797,6 +852,8 @@ cdef parse_leftchildloop(sent, SparseCFGChart chart, tags,
 		return chart, msg
 
 	for span in range(2, lensent + 1):
+		if beam_beta:
+			chart.flushbeam()
 		# constituents from left to right
 		for left in range(lensent - span + 1):
 			right = left + span
@@ -829,7 +886,8 @@ cdef parse_leftchildloop(sent, SparseCFGChart chart, tags,
 								blocked += 1
 							elif not chart.updateprob(
 									item, leftprob + rightprob + rule.prob,
-									beam_beta if span <= beam_delta else 0.0):
+									beam_beta if span <= beam_delta else 0.0,
+									0.0):
 								blocked += 1
 							else:
 								chart.addedge(item, mid, rule)
@@ -869,12 +927,10 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 		uint32_t n
 		short left, right, lensent = len(sent)
 		Prob openclassfactor = 0.001
-		short beam_size = chart.beamsize \
-				if CFGChart_fused is DenseCFGChart else 0
+		short beam_size = chart.beamsize
 	for left, word in enumerate(sent):
-
-		if CFGChart_fused is DenseCFGChart:
-			chart.beamsize = 0
+		# NB: do not prune POS tags
+		chart.beamsize = 0
 
 		tag = tags[left] if tags and tags[left] else None
 		# if we are given gold tags, make sure we only allow matching
@@ -912,11 +968,7 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 					continue
 				lhs = lexrule.lhs
 				if tag is None or tagre.match(grammar.tolabel[lhs]):
-					if CFGChart_fused is SparseCFGChart:
-						chart.updateprob(cell + lhs,
-							lexrule.prob + reserveprob, 0.0)
-					if CFGChart_fused is DenseCFGChart:
-						chart.updateprob(cell + lhs,
+					chart.updateprob(cell + lhs,
 							lexrule.prob + reserveprob, 0.0, 0.0)
 					chart.addedge(cell + lhs, right, NULL)
 					recognized = True
@@ -943,12 +995,8 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 						blocked[0] += 1
 						continue
 					lhs = lexrule.lhs
-					if CFGChart_fused is SparseCFGChart:
-						chart.updateprob(cell + lhs,
-								lexrule.prob - pylog(openclassfactor), 0.0)
-					if CFGChart_fused is DenseCFGChart:
-						chart.updateprob(cell + lhs,
-								lexrule.prob - pylog(openclassfactor), 0.0, 0.0)
+					chart.updateprob(cell + lhs,
+							lexrule.prob - pylog(openclassfactor), 0.0, 0.0)
 					chart.addedge(cell + lhs, right, NULL)
 					recognized = True
 					if midfilter is not NULL:
@@ -958,10 +1006,7 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 		if not recognized and tag is not None:
 			for lhs in grammar.lexicallhs:
 				if tagre.match(grammar.tolabel[lhs]):
-					if CFGChart_fused is SparseCFGChart:
-						chart.updateprob(cell + lhs, 0.0, 0.0)
-					elif CFGChart_fused is DenseCFGChart:
-						chart.updateprob(cell + lhs, 0.0, 0.0, 0.0)
+					chart.updateprob(cell + lhs, 0.0, 0.0, 0.0)
 					chart.addedge(cell + lhs, right, NULL)
 					recognized = True
 					if midfilter is not NULL:
@@ -975,7 +1020,8 @@ cdef populatepos(CFGChart_fused chart, sent, tags,
 						'but tag %r not in grammar' % tag)
 			return False, 'no parse: all tags for word %r blocked' % word
 
-		if CFGChart_fused is DenseCFGChart and beam_size:
+		# NB: prune unary rules after POS-tags however
+		if beam_beta or beam_size:
 			chart.beamsize = beam_size
 			chart.flushbeam()
 
@@ -1031,7 +1077,7 @@ cdef inline void applyunaryrules(
 		for n in range(grammar.numunary):
 			rule = &(grammar.unary[rhs1][n])
 			lhs = rule.lhs
-			if CFGChart_fused is DenseCFGChart and leftboundary is not None:
+			if leftboundary is not None and rightboundary is not None:
 				est = leftboundary[lhs] + rightboundary[lhs]
 			if rule.rhs1 != rhs1:
 				break
@@ -1044,13 +1090,7 @@ cdef inline void applyunaryrules(
 			item = cell + lhs
 			add = False
 			if rule.prob + prob < chart._subtreeprob(item):
-				if CFGChart_fused is SparseCFGChart and \
-					chart.updateprob(item, rule.prob + prob,
-						beam_beta if right - left <= beam_delta else 0.0):
-					unaryagenda.setifbetter(lhs, rule.prob + prob)
-					add = True
-				elif CFGChart_fused is DenseCFGChart and \
-					chart.updateprob(item, rule.prob + prob,
+				if chart.updateprob(item, rule.prob + prob,
 						beam_beta if right - left <= beam_delta else 0.0, est):
 					unaryagenda.setifbetter(lhs, rule.prob + prob)
 					add = True
