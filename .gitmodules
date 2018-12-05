@@ -7,6 +7,3 @@
 [submodule "gheap"]
 	path = gheap
 	url = https://github.com/valyala/gheap.git
-[submodule "minmaxheap"]
-	path = minmaxheap
-	url = git@github.com:kilian-gebhardt/MinMaxHeap.git
