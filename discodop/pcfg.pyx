@@ -25,37 +25,6 @@ cdef inline uint64_t cellstruct(Idx start, Idx end):
 	return result.dt
 
 
-cpdef inline bint updatebeam(Prob[:] beam, Prob newprob, short size,
-			short start):
-	cdef short i = start
-	while i > 0:
-		if newprob >= beam[i-1]:
-			break
-		elif i < size:
-			beam[i] = beam[i-1]
-			i = i-1
-		else:
-			i = i-1
-	if i < size:
-		beam[i] = newprob
-		return True
-	return False
-
-
-cpdef inline short findindex(const Prob[:] beam, Prob target, short right):
-	cdef short left = 0, center = right / 2
-	right = right - 1
-	while left <= right:
-		center = left + (right - left) / 2
-		if beam[center] == target:
-			return center
-		elif beam[center] > target:
-			right = center - 1
-		else:
-			left = center + 1
-	return center
-
-
 cdef class CFGChart(Chart):
 	"""A Chart for context-free grammars (CFG).
 
@@ -98,16 +67,13 @@ cdef class DenseCFGChart(CFGChart):
 		self.parseforest.resize(entries)
 		self.beam = INFINITY
 		self.beamsize = 0
-		self.beamprobs = np.full(self.beamsize, np.inf, dtype='d')
+		self.beamprobs.reserve(self.beamsize)
 
 	cdef void flushbeam(self):
 		cdef size_t x
 		self.beam = INFINITY
-		if self.beamprobs.shape[0] >= self.beamsize:
-			for x in range(self.beamsize):
-				self.beamprobs[x] = INFINITY
-		else:
-			self.beamprobs = np.full(self.beamsize, np.inf, dtype='d')
+		self.beamprobs.reserve(self.beamsize)
+		self.beamprobs.clear()
 
 	def root(self):
 		return cellidx(0, self.lensent, self.lensent,
@@ -155,29 +121,19 @@ cdef class DenseCFGChart(CFGChart):
 				elif prob < self.probs[item]:  # prob falls within beam
 					self.probs[item] = prob
 			else:  # use local beam ranking (+ optional beam thresholding)
-				# item not new and prob within beam
-				if not newitem and prob + est < self.beam \
-					and prob + est <= self.beamprobs[self.beamsize - 1]:
+				# prob within beam
+				if prob + est < self.beam and (
+							self.beamprobs.size() < self.beamsize
+								or prob + est <= self.beamprobs.peekmax()):
 					if prob < self.probs[item]:
 						self.probs[item] = prob
-						startidx = findindex(self.beamprobs,
-								self.probs[item] + est, self.beamsize) + 1
-						if startidx <= self.beamsize and \
-							updatebeam(self.beamprobs, prob + est,
-									self.beamsize, startidx):
-							if beam:
-								self.beam = self.beamprobs[0] + beam
-							else:
-								self.beam = self.beamprobs[self.beamsize - 1]
-				# item new and prob within beam
-				elif newitem and prob + est < self.beam and updatebeam(
-							self.beamprobs, prob + est, self.beamsize,
-							self.beamsize):
-					self.probs[item] = prob
+					self.beamprobs.insert(prob + est)
+					if self.beamprobs.size() > self.beamsize:
+						self.beamprobs.popmax()
 					if beam:
-						self.beam = self.beamprobs[0] + beam
+						self.beam = self.beamprobs.peekmin() + beam
 					else:
-						self.beam = self.beamprobs[self.beamsize - 1]
+						self.beam = self.beamprobs.peekmax()
 				# prob falls outside of beam
 				else:
 					return False
@@ -346,7 +302,8 @@ cdef class SparseCFGChart(CFGChart):
 		self.probs.push_back(INFINITY)
 		self.beam = INFINITY
 		self.beamsize = 0
-		self.beamprobs = np.full(self.beamsize, np.inf, dtype='d')
+		self.beamprobs.reserve(self.beamsize)
+		# self.beamprobs = np.full(self.beamsize, np.inf, dtype='d')
 
 	def root(self):
 		return self.itemindex[cellstruct(0, self.lensent) + self.start]
@@ -405,11 +362,8 @@ cdef class SparseCFGChart(CFGChart):
 	cdef void flushbeam(self):
 		cdef size_t x
 		self.beam = INFINITY
-		if self.beamprobs.shape[0] >= self.beamsize:
-			for x in range(self.beamsize):
-				self.beamprobs[x] = INFINITY
-		else:
-			self.beamprobs = np.full(self.beamsize, np.inf, dtype='d')
+		self.beamprobs.reserve(self.beamsize)
+		self.beamprobs.clear()
 
 	cdef bint updateprob(self, uint64_t item, Prob prob, Prob beam, Prob est):
 		"""Update probability for item if better than current one.
@@ -430,28 +384,19 @@ cdef class SparseCFGChart(CFGChart):
 					# prob falls within beam
 					updateitem = True
 			else:  # use local beam ranking (+ optional beam thresholding)
-				# item not new and prob within beam
-				if not newitem and prob + est < self.beam \
-					and prob + est <= self.beamprobs[self.beamsize - 1]:
-					if prob < self.probs[itemidx]:
+				# prob within beam
+				if prob + est < self.beam and \
+					(self.beamprobs.size() < self.beamsize
+					 or prob + est < self.beamprobs.peekmax()):
+					if not newitem and prob < self.probs[itemidx]:
 						updateitem = True
-						startidx = findindex(self.beamprobs,
-								self.probs[itemidx] + est, self.beamsize) + 1
-						if startidx <= self.beamsize and \
-							updatebeam(self.beamprobs, prob + est,
-									self.beamsize, startidx):
-							if beam:
-								self.beam = self.beamprobs[0] + beam
-							else:
-								self.beam = self.beamprobs[self.beamsize - 1]
-				# item new and prob within beam
-				elif newitem and prob + est < self.beam and updatebeam(
-							self.beamprobs, prob + est, self.beamsize,
-							self.beamsize):
+					self.beamprobs.insert(prob + est)
+					if self.beamprobs.size() > self.beamsize:
+						self.beamprobs.popmax()
 					if beam:
-						self.beam = self.beamprobs[0] + beam
+						self.beam = self.beamprobs.peekmin() + beam
 					else:
-						self.beam = self.beamprobs[self.beamsize - 1]
+						self.beam = self.beamprobs.peekmax()
 				# prob falls outside of beam
 				else:
 					return False

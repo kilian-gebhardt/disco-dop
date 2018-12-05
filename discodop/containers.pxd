@@ -168,6 +168,20 @@ cdef extern from "../cpp-btree/btree_set.h" namespace "btree" nogil:
 		size_t erase(T&)
 
 
+cdef extern from "../minmaxheap/_minmaxheap.h" namespace "minmaxheap" nogil:
+	cdef cppclass MinMaxHeap[T]:
+		MinMaxHeap()
+		size_t size()
+		void insert(T key)
+		void clear()
+		T peekmin()
+		T peekmax()
+		T popmin()
+		T popmax()
+		void reserve(size_t n)
+		vector[T] getheap()
+
+
 cdef extern from "_containers.h" nogil:
 	cdef cppclass ProbRule:
 		Prob prob

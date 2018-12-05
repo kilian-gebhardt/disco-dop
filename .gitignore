@@ -29,6 +29,7 @@
 !cpp-btree/
 !sparsepp/
 !gheap
+!minmaxheap
 
 !discodop/
 discodop/*

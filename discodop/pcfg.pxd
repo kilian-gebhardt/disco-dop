@@ -7,7 +7,7 @@ from cpython.float cimport PyFloat_AS_DOUBLE
 from .containers cimport (Chart, Grammar, ProbRule, LexicalRule,
 		Edge, RankedEdge, Idx, Prob, Label, ItemNo,
 		cellidx, cellstart, cellend,
-		sparse_hash_map, sparse_hash_set, Agenda, Whitelist,
+		sparse_hash_map, sparse_hash_set, Agenda, Whitelist, MinMaxHeap,
 		SmallChartItem, FatChartItem, CFGtoSmallChartItem, CFGtoFatChartItem)
 
 cdef extern from "<cmath>" namespace "std" nogil:
@@ -53,7 +53,7 @@ cdef class CFGChart(Chart):
 	cdef vector[Prob] beambuckets
 	cdef ItemNo getitemidx(self, uint64_t idx)
 	cdef Prob beam
-	cdef Prob[:] beamprobs
+	cdef MinMaxHeap[Prob] beamprobs
 	cdef short beamsize
 
 
