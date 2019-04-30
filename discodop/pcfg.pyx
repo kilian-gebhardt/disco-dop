@@ -691,7 +691,8 @@ cdef inline void applyunaryrules(
 	# collect possible rhs items for unaries
 	for itemidx in range(lastidx, chart.items.size()):
 		item = chart.items[itemidx]
-		unaryagenda.setitem(
+		# unaryagenda.setitem(
+		unaryagenda.setifbetter(
 				chart._label(item), (<Chart>chart).subtreeprob(itemidx))
 	# 	unaryentry.first = chart._label(item)
 	# 	unaryentry.second = chart._subtreeprob(item)
